@@ -12,7 +12,7 @@ import csv
 import os
 import datetime
 from tkinter import *
-
+from pylablib.devices import Thorlabs #Thorlabs library
 
 import sys
 import clr
@@ -46,6 +46,20 @@ RotAxisLimit = Limits(LowerLimit=-100, UpperLimit=100)
 
 LimitList = [XAxisLimit, YAxisLimit, ZAxisLimit, RotAxisLimit]
 
+#Scale for the Thorlabs actuators, translating microsteps to mm
+KCubestepsPerMM = 34554.88  # Magic Number from datasheet
+KCubeScale = (KCubestepsPerMM, KCubestepsPerMM * 53.68, KCubestepsPerMM / 90.9 / 2)
+ZAxisStepsPerMM = 819200  # Magic Number from datasheet
+ZAxisScale = (ZAxisStepsPerMM, ZAxisStepsPerMM * 53.68, ZAxisStepsPerMM / 90.9 / 2)
+
+
+#Stage and actuator defining
+XPSStage = XPS()
+KCube = Thorlabs.KinesisMotor(str(27262610), scale=KCubeScale)
+ZAxis = Thorlabs.KinesisMotor(str(70292334), is_rack_system=True, scale=ZAxisScale, default_channel=1)
+
+#Keeping track of where the stages are
+PositionList = [0.0, 0.0, 0.0, 0.0]
 
 def save_to_csv(filename, *lists):
 
@@ -167,10 +181,6 @@ def manualVoltageMesurement():
     # Add voltage measurement on button click
     return 3
 
-def homeActuators():
-    # TODO
-    # Add homing procedure for all stages, if possible at the same time
-    return 3
 
 def startPeakFinding():
     # TODO
@@ -196,13 +206,134 @@ def manualMeasurementRun():
     showSelected()
     return 3
 
+def updatePosition():
+    print("tehe")
+    #TODO update positionlabels through positionlist
 
-def moveActuators():
+def moveActuators(AxisIndex: int, Position: float):
+    XPos = PositionList[0]
+    YPos = PositionList[1]
 
+    PositionList[AxisIndex] = Position
+    updatePosition()
+
+    if not LimitList[AxisIndex].CheckLimit(Position=Position):
+        abort()
+        return False
+
+    match AxisIndex:
+        case 0:
+            result = XPSStage.GroupMoveAbsolute("XYGroup", [Position, YPos], 2, str())
+            if result != 0:
+                return False
+
+            result = XPSStage.WaitMotionEnd("XYGroup", 10000.0, [Position * 1000, YPos * 1000], str())
+            if result == 0:
+                return True
+            else:
+                return False
+
+        case 1:
+            result = XPSStage.GroupMoveAbsolute("XYGroup", [XPos, Position], 2, str())
+            if result != 0:
+                return False
+
+            result = XPSStage.WaitMotionEnd("XYGroup", 10000.0, [XPos * 1000, Position * 1000], str())
+            if result == 0:
+                return True
+            else:
+                return False
+
+        case 2:
+            ZAxis.move_to(position=Position)
+            ZAxis.wait_move(timeout=10)
+
+            return True
+
+        case 3:
+            KCube.move_to(position=Position)
+            KCube.wait_move(timeout=10)
+
+            return True
+
+def connectToStages():
+
+    #Connect to XPS Stage
+    if not connectToXPSStage(XPSStage):
+        abort()
+
+    #Connect to Thorlabs
+    ZAxis.open()
+    KCube.open()
+    ZAxis.set_supported_channels(3)
+    ZAxis._enable_channel(enabled=True, channel=1)
+
+    if ZAxis.is_opened() and KCube.is_opened():
+        return True
+    else:
+        return False
+
+def homeActuators():
+
+    #Home XPS Stage
+    XPSStage.GroupHomeSearch("XYGroup", str())
+
+    #Home Z and Rot Axes
+
+    KCube.setup_homing(velocity=0.75, offset_distance=7.55) #TODO Find correct offsets
+    ZAxis.setup_homing(velocity=0.75, offset_distance=2)
+
+    ZAxis.home(force=True, sync=False)
+    KCube.home(force=True, sync=False)
+
+    ZAxis.wait_for_home(timeout=40)
+    KCube.wait_for_home(timeout=40)
+
+    #TODO establish correct limit switches, maybe contact thorlabs, or trial and error
+    KCube.setup_limit_switch(hw_kind_cw='ignore', hw_kind_ccw='ignore')
+    ZAxis.setup_limit_switch(hw_kind_cw='ignore', hw_kind_ccw='ignore')
+
+    KCube.setup_velocity(min_velocity=0.0, acceleration=1.0, max_velocity=2.0)
+    ZAxis.setup_velocity(min_velocity=0.0, acceleration=1.0, max_velocity=2.0)
+
+    if KCube.is_opened() and KCube.is_opened():
+        return True
+    else:
+        return False
+
+
+def measurementRun():
     # TODO
-    # Implement axis index or Axis names, and function to move said axis to a position
-    # Also update the position labels
+    # Create measurement run function
+
     return 3
+
+# Move the XY Stage to a position
+def XPS_GroupMoveAbsolute(myXPS, TargetPosition, nbItems=2):
+
+    GroupName = "XYGroup"
+    result = myXPS.GroupMoveAbsolute(GroupName, TargetPosition, nbItems, str())
+    if result == 0:
+        return True
+    else:
+        return False
+
+# Close connection to XY Stage
+def XPS_Close(myXPS):
+    myXPS.KillAll(str())
+    myXPS.CloseInstrument()
+    print('XPS closed')
+
+
+#Get Voltage applied to pin XPS RDL Controller
+def XPS_VoltageGet(myXPS):
+    voltage = [1]
+    result = myXPS.GPIOAnalogGet(["GPIO2.ADC1"], voltage, str())
+    print("Voltage: ")
+    print((result[1])[0])
+    # TODO
+    # Format the output correctly to give proper return value
+
 
 
 def linspace(lower_limit, upper_limit, num_points):
@@ -364,25 +495,15 @@ def showSelected():
 
 
 def testFunction():
-    XPSStage = XPS()
-    Error = "No Error"
-    connectToXPSStage(XPSStage)
 
-    XPSStage.GroupHomeSearch("XYGroup", Error)
-    print(Error)
+    if not connectToStages():
+        abort()
 
-    time.sleep(2)
-    XPSStage.GroupMoveAbsolute("XYGroup", [1.0, 3.0], 2, Error)
-    print(Error)
+    if not homeActuators():
+        abort()
 
-    time.sleep(2)
-    CurrentPosition = [0.0, 0.0]
-    XPSStage.GroupPositionCurrentGet("XYGroup", CurrentPosition, 2, Error)
-    print(Error)
-    print(CurrentPosition)
-    XPS_VoltageGet(XPSStage)
 
-    XPS_Close(XPSStage)
+
 
 def workThread():
     # Start the worker thread
@@ -391,63 +512,23 @@ def workThread():
     thread.daemon = True  # Daemonize thread to exit with the program
     thread.start()
 
-def connectToStages():
-    # TODO
-    # Make connect to all stages function
-    return 3
-
 
 def connectToXPSStage(myXPS):
 
-    # Connecting to XPS RDL conntroller for X and Y axis
+    # Connecting to XPS RDL controller for X and Y axis
     address = "192.168.0.254"
     port = 5001
     timeout = 1000
+
     result = myXPS.OpenInstrument(address, port, timeout)
-    if result == 0:
-        print('Open ', address, ":", port, " => Successful")
-    else:
-        print('Open ', address, ":", port, " => failure ", result)
-    print(result)
+    if result != 0:
+        return False
 
-    myXPS.GroupInitialize("XYGroup", str())
+    result = myXPS.GroupInitialize("XYGroup", str())
+    if result != 0:
+        return False
+    return True
 
-    #TODO
-    #Establish Connection to each stage, verifying that its actually connected each time
-
-    return 3
-
-def measurementRun():
-    # TODO
-    # Create measurement run function
-
-    return 3
-
-# Move the XY Stage to a position
-def XPS_GroupMoveAbsolute(myXPS, TargetPosition, nbItems=2):
-
-    GroupName = "XYGroup"
-    result = myXPS.GroupMoveAbsolute(GroupName, TargetPosition, nbItems, str())
-    if result == 0:
-        print('success')
-    else:
-        print('ControllerStatusGet Error => ')
-
-
-# Close connection to XY Stage
-def XPS_Close(myXPS):
-    myXPS.KillAll(str())
-    myXPS.CloseInstrument()
-    print('XPS closed')
-
-#Get Voltage applied to pin XPS RDL Controller
-def XPS_VoltageGet(myXPS):
-    voltage = [1]
-    result = myXPS.GPIOAnalogGet(["GPIO2.ADC1"], voltage, str())
-    print("Voltage: ")
-    print((result[1])[0])
-    # TODO
-    # Format the output correctly to give proper return value
 
 
 """
