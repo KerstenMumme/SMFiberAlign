@@ -25,6 +25,27 @@ from CommandInterfaceXPS import XPS
 # Create abort_event
 abort_event = threading.Event()
 
+#Class for holding the limit information, and performing the software limit checking
+class Limits:
+    def __init__(self, LowerLimit: float, UpperLimit: float):
+        self.LL = LowerLimit
+        self.UL = UpperLimit
+
+    def CheckLimit(self, Position: float):
+        if Position > self.LL and Position < self.UL:
+            return True
+        else:
+            return False
+
+#TODO set the correct limits
+
+XAxisLimit = Limits(LowerLimit=-100, UpperLimit=100)
+YAxisLimit = Limits(LowerLimit=-100, UpperLimit=100)
+ZAxisLimit = Limits(LowerLimit=-100, UpperLimit=100)
+RotAxisLimit = Limits(LowerLimit=-100, UpperLimit=100)
+
+LimitList = [XAxisLimit, YAxisLimit, ZAxisLimit, RotAxisLimit]
+
 
 def save_to_csv(filename, *lists):
 
@@ -291,6 +312,9 @@ def create_gui(root):
     startWorkerThreadButton = tk.Button(root, text="Start Worker Thread", command=workThread)
     startWorkerThreadButton.grid(row=16)
 
+    testButton = tk.Button(root, text="Test Button", command=testFunction)
+    testButton.grid(row=17)
+
     global addToPlotEntry, referencePowerEntry, lowerLimitEntry, upperLimitEntry, positionEntry, numberOfPointsEntry
     addToPlotEntry = tk.Entry(root, width=20)
     addToPlotEntry.grid(row=14)
@@ -338,6 +362,28 @@ def showSelected():
     text = clicked.get()
     print(text)
 
+
+def testFunction():
+    XPSStage = XPS()
+    Error = "No Error"
+    connectToXPSStage(XPSStage)
+
+    XPSStage.GroupHomeSearch("XYGroup", Error)
+    print(Error)
+
+    time.sleep(2)
+    XPSStage.GroupMoveAbsolute("XYGroup", [1.0, 3.0], 2, Error)
+    print(Error)
+
+    time.sleep(2)
+    CurrentPosition = [0.0, 0.0]
+    XPSStage.GroupPositionCurrentGet("XYGroup", CurrentPosition, 2, Error)
+    print(Error)
+    print(CurrentPosition)
+    XPS_VoltageGet(XPSStage)
+
+    XPS_Close(XPSStage)
+
 def workThread():
     # Start the worker thread
     abort_event.clear()
@@ -378,7 +424,9 @@ def measurementRun():
     return 3
 
 # Move the XY Stage to a position
-def XPS_GroupMoveAbsolute(myXPS, GroupName, TargetPosition, nbItems):
+def XPS_GroupMoveAbsolute(myXPS, TargetPosition, nbItems=2):
+
+    GroupName = "XYGroup"
     result = myXPS.GroupMoveAbsolute(GroupName, TargetPosition, nbItems, str())
     if result == 0:
         print('success')
@@ -388,6 +436,7 @@ def XPS_GroupMoveAbsolute(myXPS, GroupName, TargetPosition, nbItems):
 
 # Close connection to XY Stage
 def XPS_Close(myXPS):
+    myXPS.KillAll(str())
     myXPS.CloseInstrument()
     print('XPS closed')
 
@@ -395,9 +444,8 @@ def XPS_Close(myXPS):
 def XPS_VoltageGet(myXPS):
     voltage = [1]
     result = myXPS.GPIOAnalogGet(["GPIO2.ADC1"], voltage, str())
-    print("Return:")
+    print("Voltage: ")
     print((result[1])[0])
-    print(result)
     # TODO
     # Format the output correctly to give proper return value
 
