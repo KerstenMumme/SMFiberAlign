@@ -37,6 +37,16 @@ class Limits:
         else:
             return False
 
+# Struct for Queue messages
+@dataclass
+class LabelUpdate:
+    label: int
+    message: any
+
+# Define what to do when the abort Button is pressed
+def abort() -> None:
+    abort_event.set()
+
 #TODO set the correct limits
 
 XAxisLimit = Limits(LowerLimit=-100, UpperLimit=100)
@@ -61,6 +71,9 @@ ZAxis = Thorlabs.KinesisMotor(str(70292334), is_rack_system=True, scale=ZAxisSca
 #Keeping track of where the stages are
 PositionList = [0.0, 0.0, 0.0, 0.0]
 
+#Save the optimum position
+OptimumList = [0.0, 0.0, 0.0, 0.0]
+
 def save_to_csv(filename, *lists):
 
     if not lists:
@@ -79,15 +92,7 @@ def save_to_csv(filename, *lists):
         writer = csv.writer(csvfile)
         writer.writerows(rows)
 
-# Struct for Queue messages
-@dataclass
-class LabelUpdate:
-    label: int
-    message: any
 
-# Define what to do when the abort Button is pressed
-def abort() -> None:
-    abort_event.set()
 
 
 # Function to be run in a separate thread (the worker thread)
@@ -214,6 +219,7 @@ def moveActuators(AxisIndex: int, Position: float):
     XPos = PositionList[0]
     YPos = PositionList[1]
 
+    #TODO Check if all defined constants are read only, or need to be globally overwritten, such as the PositionList Update
     PositionList[AxisIndex] = Position
     updatePosition()
 
@@ -279,7 +285,6 @@ def homeActuators():
     XPSStage.GroupHomeSearch("XYGroup", str())
 
     #Home Z and Rot Axes
-
     KCube.setup_homing(velocity=0.75, offset_distance=7.55) #TODO Find correct offsets
     ZAxis.setup_homing(velocity=0.75, offset_distance=2)
 
@@ -476,7 +481,7 @@ def create_gui(root):
     
     
     global AxisSelectorMenue, clicked
-
+    global options
     options = ["X axis", "Y axis", "Z axis", "Rot axis"]
     clicked = StringVar()
     clicked.set("X axis")
