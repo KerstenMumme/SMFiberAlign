@@ -497,16 +497,20 @@ def create_gui(root):
 def showSelected():
     text = clicked.get()
     print(text)
+    print("Index:", options.index(text))
 
 
 def testFunction():
 
-    if not connectToStages():
-        abort()
+    showSelected()
+    #if not connectToStages():
+    #    abort()
 
-    if not homeActuators():
-        abort()
+    #if not homeActuators():
+    #    abort()
 
+    #if not moveActuators(1, 1.0):
+    #    abort()
 
 
 
