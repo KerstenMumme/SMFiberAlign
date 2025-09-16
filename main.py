@@ -74,15 +74,16 @@ PositionList = [0.0, 0.0, 0.0, 0.0]
 #Save the optimum position
 OptimumList = [0.0, 0.0, 0.0, 0.0]
 
-def save_to_csv(filename, *lists):
 
-    if not lists:
-        raise ValueError("At least one list is required")
+# TODO Remove after debugging
+ReferencePower = 1.1
+
+
+
+def save_to_csv(filename, *lists):
 
     # Ensure all lists have equal length
     length = len(lists[0])
-    if any(len(lst) != length for lst in lists):
-        raise ValueError("All lists must have the same length")
 
     # Transpose the lists to group them row-wise
     rows = zip(*lists)
@@ -199,16 +200,18 @@ def returnToOptimum():
     return 3
 
 def goToPosition():
-    # TODO
-    # Read axis selector and move that stage to that position.
-    # Also make sure to check axis limits
+
+    index = getSelectorIndex()
+    position = float(positionEntry.get())
+    moveActuators(index, position)
+
+
     return 3
 
 def manualMeasurementRun():
 
-    # TODO
-    # Move selected axis between two points, using linspace equivialent,
-    showSelected()
+    # TODO Move selected axis between two points, using linspace equivialent,
+    # TODO set Reference Power
     return 3
 
 def updatePosition():
@@ -307,7 +310,34 @@ def homeActuators():
         return False
 
 
-def measurementRun():
+def convertVoltageToCoupEff(voltages: [float], referenceP: float):
+
+    length = len(voltages)
+    coupEff = [0.0] * length
+
+    for id, volt in enumerate(voltages):
+        coupEff[id] = (convertVoltageToPower(volt) / referenceP) * 100
+
+    return coupEff
+
+
+def convertVoltageToPower(voltage: float):
+
+    #TODO insert fit here
+    return 3.3
+
+def measurementRun(lowerLimit, upperLimit, numberOfPoints, axisIndex):
+
+    positions = linspace(lowerLimit, upperLimit, numberOfPoints)
+    voltages = [0.0] * numberOfPoints
+    for id, pos in enumerate(positions):
+        if not moveActuators(axisIndex, pos):
+            abort()
+            break
+        voltages[id] = XPS_VoltageGet(XPSStage)
+
+    coupEff = convertVoltageToCoupEff(voltages, ReferencePower)
+    return coupEff
     # TODO
     # Create measurement run function
 
@@ -494,15 +524,15 @@ def create_gui(root):
     root.bind('<<UpdateLabel>>', on_update_label)
 
 
-def showSelected():
+def getSelectorIndex():
     text = clicked.get()
-    print(text)
-    print("Index:", options.index(text))
+    index = options.index(text)
+    return index
 
 
 def testFunction():
 
-    showSelected()
+    print("test")
     #if not connectToStages():
     #    abort()
 
