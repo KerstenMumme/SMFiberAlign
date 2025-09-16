@@ -77,8 +77,8 @@ OptimumList = [0.0, 0.0, 0.0, 0.0]
 
 # TODO Remove after debugging
 ReferencePower = 1.1
-
-
+NumberOfPoints = 35
+CouplingEfficiencyRatio = 0.5
 
 def save_to_csv(filename, *lists):
 
@@ -131,15 +131,34 @@ def worker_thread(queue, gui_root):
 
 # Event handler to update the label
 def on_update_label(event) -> None:
+
     try:
         # Retrieve the next message from the queue
         message = q.get_nowait()
-        if message.label == 1:
-            testLabelVar.set(message.message)
 
-        # Update the label with the message
-        else:
-            testLabelVar.set('WeirdIndex')
+        match message.label:
+            case 1:
+                testLabelVar.set(message.message)
+            case 2:
+                voltageLabelVar.set(message.message)
+            case 3:
+                referencePowerLabelVar.set(message.message)
+            case 4:
+                xPosLabelVar.set(message.message)
+            case 5:
+                yPosLabelVar.set(message.message)
+            case 6:
+                zPosLabelVar.set(message.message)
+            case 7:
+                rotPosLabelVar.set(message.message)
+            case 8:
+                unitLabelPosVar.set(message.message)
+            case 9:
+                unitLabelLLVar.set(message.message)
+            case 10:
+                unitLabelULVar.set(message.message)
+            case _:
+                testLabelVar.set("WeirdIndex")
 
     except queue.Empty:
         pass
@@ -209,8 +228,12 @@ def goToPosition():
     return 3
 
 def manualMeasurementRun():
+    referencePower = float(referencePowerEntry.get())
+    lowerLimit = float(lowerLimitEntry.get())
+    upperLimit = float(upperLimitEntry.get())
+    axisIndex = getSelectorIndex()
+    measurementRun(lowerLimit, upperLimit, NumberOfPoints, axisIndex, referencePower)
 
-    # TODO Move selected axis between two points, using linspace equivialent,
     # TODO set Reference Power
     return 3
 
@@ -323,10 +346,34 @@ def convertVoltageToCoupEff(voltages: [float], referenceP: float):
 
 def convertVoltageToPower(voltage: float):
 
-    #TODO insert fit here
-    return 3.3
+    powermW = voltage * 0.0341 + 0.3435
 
-def measurementRun(lowerLimit, upperLimit, numberOfPoints, axisIndex):
+    return powermW
+
+
+def detectPeak(coupEff: [float]):
+
+    length = len(coupEff)
+    maximum = max(coupEff)
+    lowerBoundary = 0
+    upperBoundary = 0
+
+    for id, ce in enumerate(coupEff):
+        if (ce / maximum) > CouplingEfficiencyRatio:
+            lowerBoundary = id
+            break
+
+    for id, ce in enumerate(reversed(coupEff)):
+        if (ce / maximum) > CouplingEfficiencyRatio:
+            upperBoundary = length - 1 - id
+            break
+
+    result = [lowerBoundary, upperBoundary]
+    return result
+
+
+
+def measurementRun(lowerLimit, upperLimit, numberOfPoints, axisIndex, referencePower):
 
     positions = linspace(lowerLimit, upperLimit, numberOfPoints)
     voltages = [0.0] * numberOfPoints
@@ -336,12 +383,10 @@ def measurementRun(lowerLimit, upperLimit, numberOfPoints, axisIndex):
             break
         voltages[id] = XPS_VoltageGet(XPSStage)
 
-    coupEff = convertVoltageToCoupEff(voltages, ReferencePower)
+    coupEff = convertVoltageToCoupEff(voltages, referencePower)
     return coupEff
-    # TODO
-    # Create measurement run function
+    # TODO Update Plot, labels, and save to file
 
-    return 3
 
 # Move the XY Stage to a position
 def XPS_GroupMoveAbsolute(myXPS, TargetPosition, nbItems=2):
@@ -531,8 +576,11 @@ def getSelectorIndex():
 
 
 def testFunction():
+    messageObject = LabelUpdate(label=2, message="Hello World")
+    messageObject.message = 'Process Done'
+    q.put(messageObject)
+    root.event_generate('<<UpdateLabel>>')
 
-    print("test")
     #if not connectToStages():
     #    abort()
 
@@ -591,6 +639,7 @@ main
 now = datetime.datetime.now()
 dt_string = now.strftime("%Y_%m_%d_%H_%M")
 
+global root
 root = tk.Tk()
 root.title("Fiber Coupling Project")
 root.geometry("10000x60000")  # set starting size of window
@@ -599,8 +648,8 @@ root.maxsize(1000, 600)  # width x height
 create_gui(root)
 
 # Create a queue to communicate between threads
+global q
 q = queue.Queue()
-
 # Run the Tkinter main loop
 root.mainloop()
 
