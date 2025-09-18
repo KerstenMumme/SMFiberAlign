@@ -69,10 +69,12 @@ KCube = Thorlabs.KinesisMotor(str(27262610), scale=KCubeScale)
 ZAxis = Thorlabs.KinesisMotor(str(70292334), is_rack_system=True, scale=ZAxisScale, default_channel=1)
 
 #Keeping track of where the stages are
+global PositionList
 PositionList = [0.0, 0.0, 0.0, 0.0]
 
 #Save the optimum position
 OptimumList = [0.0, 0.0, 0.0, 0.0]
+ReachedOptimum = False
 
 
 # TODO Remove after debugging
@@ -80,20 +82,32 @@ ReferencePower = 1.1
 NumberOfPoints = 35
 CouplingEfficiencyRatio = 0.5
 
-def save_to_csv(filename, *lists):
+NumberOfDataPoints = 35
+MaxNumberOfItteration = 20
+MinNumberOfItteration = 5
+ImprovementLimit = 0.02
 
-    # Ensure all lists have equal length
-    length = len(lists[0])
+global Debugging
+Debugging = True
 
-    # Transpose the lists to group them row-wise
-    rows = zip(*lists)
+now = datetime.datetime.now()
+global dt_string
+dt_string = now.strftime("%Y_%m_%d_%H_%M")
+if not os.path.exists(dt_string):
+    os.makedirs(dt_string)
 
-    # Write to CSV file
-    with open(filename, 'w', newline='') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerows(rows)
+#PlotLists
+XPlotList = []
+YPlotList = []
 
+def save_to_csv(directory, filename, listOne, listTwo):
 
+    length = len(listOne)
+    csvfile = open(directory + "/" + filename + ".csv", 'w', newline='')
+    for i in range(length):
+        csvfile.write(listOne[i] + ", " + listTwo[i])
+
+    csvfile.close()
 
 
 # Function to be run in a separate thread (the worker thread)
@@ -165,7 +179,7 @@ def on_update_label(event) -> None:
 
 
 # Function to create and embed the matplotlib plot
-def create_plot(frame, t, y):
+def create_plot(frame, x, y):
     # Create a matplotlib figure and plot
     fig = Figure(figsize=(5, 4), dpi=100)
     ax = fig.add_subplot(111)
@@ -173,8 +187,8 @@ def create_plot(frame, t, y):
     # Sample plot (a simple sine wave)
 
 
-    ax.plot(t, y)
-    ax.set_title("Sample Plot")
+    ax.plot(x, y)
+    ax.set_title("Coupling Efficiency")
 
     # Create a canvas to embed the matplotlib figure into Tkinter
     canvas = FigureCanvasTkAgg(fig, master=frame)  # A tk.DrawingArea
@@ -183,39 +197,91 @@ def create_plot(frame, t, y):
     # Pack the canvas in the frame (or use .grid(), .place())
     canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-def add_to_plot():
-    try:
-        # Append the new values to t and y
-        t.append(int(max(t) + 1))  # Increment the x-axis value
-        y.append(float(addToPlotEntry.get()))  # Get the input value for the y-axis
+def add_to_plot(XValue, YValue):
+    global XPlotList, YPlotList
+    if len(XPlotList) == 0:
+        XPlotList = [XValue]
+        YPlotList = [YValue]
+    else:
+        XPlotList.append(XValue)  # Increment the x-axis value
+        YPlotList.append(YValue)  # Get the input value for the y-axis
 
-        # Clear the previous plot and update the frame
-        for widget in plot_frame.winfo_children():
-            widget.destroy()  # Remove previous plot
+    # Clear the previous plot and update the frame
+    for widget in plot_frame.winfo_children():
+        widget.destroy()  # Remove previous plot
 
-        # Create the updated plot
-        create_plot(plot_frame, t, y)
-    except ValueError:
-        print("Please enter a valid integer.")
-        t.pop()
+    # Create the updated plot
+    create_plot(plot_frame, XPlotList, YPlotList)
 
+def clearPlotData():
+    global XPlotList, YPlotList
+    XPlotList = []
+    YPlotList = []
 
 def manualVoltageMesurement():
 
-    # TODO
-    # Add voltage measurement on button click
+    voltage = XPS_VoltageGet(XPSStage)
+    messageObject = LabelUpdate(label=2, message=str(voltage))
+    q.put(messageObject)
+    root.event_generate('<<UpdateLabel>>')
+
     return 3
 
 
 def startPeakFinding():
-    # TODO
-    # Create and implement peak finding algorithm, if possible using a 2D scanning, from the xps stage
-    return 4
+
+    ItterationIndex = 0
+    ImprovementRatio = 1
+    ImprovementList = [0.0] * MaxNumberOfItteration
+    LimitReached = False
+    global ReferencePower
+    ReferencePower = float(referencePowerEntry.get())
+
+    XBounaries = [-1, 1]
+    XBounaries = [x + PositionList[0] for x in XBounaries]
+
+    YBounaries = [-1, 1]
+    YBounaries = [x + PositionList[1] for x in YBounaries]
+
+    ZBounaries = [-3, 3]
+    ZBounaries = [x + PositionList[2] for x in ZBounaries]
+
+    RotBounaries = [-3, 1]
+    RotBounaries = [x + PositionList[3] for x in RotBounaries]
+
+    BoundaryTable = [XBounaries, YBounaries, ZBounaries, RotBounaries]
+    MaximumCoupEff = 0.0
+
+    for ItterationIndex in range(MaxNumberOfItteration):
+        if ItterationIndex >= MaxNumberOfItteration or LimitReached:
+            break
+
+        for Axis in range(4):
+            [MaximumCoupEff, BoundaryTable[Axis][0], BoundaryTable[Axis][1]] = measurementRun(lowerLimit=BoundaryTable[Axis][0], upperLimit=BoundaryTable[Axis][1], numberOfPoints=NumberOfPoints, axisIndex=Axis,referencePower=ReferencePower, runNumber=ItterationIndex)
+
+            if Debugging:
+                print("Axis:" + Axis + "between " + BoundaryTable[Axis][0] + " and " + BoundaryTable[Axis][1] + " at " + MaximumCoupEff + "% Coupling Efficiency.")
+
+        if ItterationIndex > MinNumberOfItteration:
+            LimitReached = checkImprovement(MaximumCoupEff, ImprovementList[ItterationIndex - 1])
+
+
+
+        ImprovementList[ItterationIndex] = MaximumCoupEff
+    global OptimumList, ReachedOptimum
+    OptimumList = PositionList
+    ReachedOptimum = True
+
+    messageObject = LabelUpdate(label=1, message="FoundOptimum")
+    q.put(messageObject)
+    root.event_generate('<<UpdateLabel>>')
+
 
 def returnToOptimum():
-    # TODO
-    # Create a variable for the optimum position, and return to it.
-    # Also make an error message, when not yet reached optimum
+    if ReachedOptimum:
+        for i in range(4):
+            moveActuators(i, OptimumList[i])
+
     return 3
 
 def goToPosition():
@@ -223,70 +289,80 @@ def goToPosition():
     index = getSelectorIndex()
     position = float(positionEntry.get())
     moveActuators(index, position)
-
-
     return 3
 
 def manualMeasurementRun():
-    referencePower = float(referencePowerEntry.get())
+    global ReferencePower
+    ReferencePower = float(referencePowerEntry.get())
     lowerLimit = float(lowerLimitEntry.get())
     upperLimit = float(upperLimitEntry.get())
     axisIndex = getSelectorIndex()
-    measurementRun(lowerLimit, upperLimit, NumberOfPoints, axisIndex, referencePower)
+    measurementRun(lowerLimit, upperLimit, NumberOfPoints, axisIndex, ReferencePower, "manual")
 
-    # TODO set Reference Power
-    return 3
 
-def updatePosition():
-    print("tehe")
-    #TODO update positionlabels through positionlist
 
 def moveActuators(AxisIndex: int, Position: float):
     XPos = PositionList[0]
     YPos = PositionList[1]
+    tempPos = PositionList
 
-    #TODO Check if all defined constants are read only, or need to be globally overwritten, such as the PositionList Update
+    global PositionList
+    PositionList = tempPos
     PositionList[AxisIndex] = Position
-    updatePosition()
 
     if not LimitList[AxisIndex].CheckLimit(Position=Position):
         abort()
         return False
+    if Debugging:
+        print("Moving Actuator Index:" + str(AxisIndex) + "to: " + str(Position))
 
     match AxisIndex:
         case 0:
-            result = XPSStage.GroupMoveAbsolute("XYGroup", [Position, YPos], 2, str())
-            if result != 0:
-                return False
 
-            result = XPSStage.WaitMotionEnd("XYGroup", 10000.0, [Position * 1000, YPos * 1000], str())
-            if result == 0:
-                return True
-            else:
-                return False
+            messageUpdate = LabelUpdate(message="XPos = " + str(Position) + "mm", label=AxisIndex + 4)
+            q.put(messageUpdate)
+            root.event_generate('<<UpdateLabel>>')
+
+            XPSStage.GroupMoveAbsolute("XYGroup", [Position, YPos], 2, str())
+
+            time.sleep(1)
+            return True
 
         case 1:
-            result = XPSStage.GroupMoveAbsolute("XYGroup", [XPos, Position], 2, str())
-            if result != 0:
-                return False
 
-            result = XPSStage.WaitMotionEnd("XYGroup", 10000.0, [XPos * 1000, Position * 1000], str())
-            if result == 0:
-                return True
-            else:
-                return False
+            messageUpdate = LabelUpdate(message="YPos = " + str(Position)+ "mm", label=AxisIndex + 4)
+            q.put(messageUpdate)
+            root.event_generate('<<UpdateLabel>>')
+
+            XPSStage.GroupMoveAbsolute("XYGroup", [XPos, Position], 2, str())
+
+            time.sleep(1)
+            return True
 
         case 2:
+
+            messageUpdate = LabelUpdate(message="ZPos = " + str(Position) + "mm", label=AxisIndex + 4)
+            q.put(messageUpdate)
+            root.event_generate('<<UpdateLabel>>')
+
             ZAxis.move_to(position=Position)
             ZAxis.wait_move(timeout=10)
 
             return True
 
         case 3:
+
+            messageUpdate = LabelUpdate(message="Rot = " + str(Position) + "°", label=AxisIndex + 4)
+            q.put(messageUpdate)
+            root.event_generate('<<UpdateLabel>>')
+
+            #TODO Implement Angle to Position and vice versa conversion
             KCube.move_to(position=Position)
             KCube.wait_move(timeout=10)
 
             return True
+
+
 
 def connectToStages():
 
@@ -333,20 +409,16 @@ def homeActuators():
         return False
 
 
-def convertVoltageToCoupEff(voltages: [float], referenceP: float):
+def convertVoltageToCoupEff(voltage: [float], referenceP: float):
 
-    length = len(voltages)
-    coupEff = [0.0] * length
-
-    for id, volt in enumerate(voltages):
-        coupEff[id] = (convertVoltageToPower(volt) / referenceP) * 100
+    coupEff = (convertVoltageToPower(voltage) / referenceP) * 100
 
     return coupEff
 
 
-def convertVoltageToPower(voltage: float):
+def convertVoltageToPower(voltageV: float):
 
-    powermW = voltage * 0.0341 + 0.3435
+    powermW = voltageV * 0.0341 + 0.3435
 
     return powermW
 
@@ -371,21 +443,38 @@ def detectPeak(coupEff: [float]):
     result = [lowerBoundary, upperBoundary]
     return result
 
+def checkImprovement(currentCoupEff: float, oldCoupEff: float):
 
+    if abs(1 - (currentCoupEff / oldCoupEff)) < ImprovementLimit:
+        return True
+    else:
+        return False
 
-def measurementRun(lowerLimit, upperLimit, numberOfPoints, axisIndex, referencePower):
+def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, axisIndex: int, referencePower: float, runNumber: any):
+    clearPlotData()
 
     positions = linspace(lowerLimit, upperLimit, numberOfPoints)
     voltages = [0.0] * numberOfPoints
+    coupEff = [0.0] * numberOfPoints
     for id, pos in enumerate(positions):
         if not moveActuators(axisIndex, pos):
             abort()
             break
         voltages[id] = XPS_VoltageGet(XPSStage)
+        coupEff[id] = convertVoltageToCoupEff(voltages[id], referencePower)
 
-    coupEff = convertVoltageToCoupEff(voltages, referencePower)
-    return coupEff
-    # TODO Update Plot, labels, and save to file
+        if Debugging:
+            print("Voltage: " + str(coupEff[id]))
+
+        add_to_plot(positions[id], coupEff[id])
+
+
+    AxisNames = ["XAxis", "YAxis", "ZAxis", "RotAxis"]
+    save_to_csv(dt_string + "/Run" + runNumber + "/", AxisNames[axisIndex] + ".txt", positions, voltages)
+    # TODO maybe also write the fixed coordinates to file for better data analysis
+    [LL, UL] = detectPeak(coupEff)
+    maximum = max(coupEff)
+    return [maximum, LL, UL]
 
 
 # Move the XY Stage to a position
@@ -398,21 +487,18 @@ def XPS_GroupMoveAbsolute(myXPS, TargetPosition, nbItems=2):
     else:
         return False
 
-# Close connection to XY Stage
-def XPS_Close(myXPS):
-    myXPS.KillAll(str())
-    myXPS.CloseInstrument()
-    print('XPS closed')
+
 
 
 #Get Voltage applied to pin XPS RDL Controller
 def XPS_VoltageGet(myXPS):
     voltage = [1]
     result = myXPS.GPIOAnalogGet(["GPIO2.ADC1"], voltage, str())
-    print("Voltage: ")
-    print((result[1])[0])
-    # TODO
-    # Format the output correctly to give proper return value
+    if (result[1])[0] > 10**10:
+        return 0
+    else:
+        return (result[1])[0]
+
 
 
 
@@ -492,7 +578,7 @@ def create_gui(root):
     numberOfPointsTextLabel = tk.Label(root, text="Number of points:", font=("Arial", 14))
     numberOfPointsTextLabel.grid(row=12, column=1, padx=5)
 
-    global abortButton, manualVoltageButton, homeActuatorsButton, peakFindingButton, returnToOptimumButton, goToPosButton, startMeasurementRunButton, inputButton, startWorkerThreadButton
+    global abortButton, manualVoltageButton, homeActuatorsButton, peakFindingButton, returnToOptimumButton, goToPosButton, startMeasurementRunButton, inputButton, startWorkerThreadButton, disconnectStagesButton
     abortButton = tk.Button(root, text="ABORT!", command=abort)
     abortButton.grid(row=0, column=3)
 
@@ -505,7 +591,7 @@ def create_gui(root):
     homeActuatorsButton = tk.Button(root, text="Home Actuators", command=homeActuators)
     homeActuatorsButton.grid(row=5, column=3)
 
-    peakFindingButton = tk.Button(root, text="Start peak finding", command=startPeakFinding)
+    peakFindingButton = tk.Button(root, text="Start peak finding", command=workThread)
     peakFindingButton.grid(row=2, column=3)
 
     returnToOptimumButton = tk.Button(root, text="Return to optimum", command=returnToOptimum)
@@ -525,6 +611,9 @@ def create_gui(root):
 
     testButton = tk.Button(root, text="Test Button", command=testFunction)
     testButton.grid(row=17)
+
+    disconnectStagesButton = tk.Button(root, text="Exit", command=disconnectStage)
+    disconnectStagesButton.grid(row=17, column=3)
 
     global addToPlotEntry, referencePowerEntry, lowerLimitEntry, upperLimitEntry, positionEntry, numberOfPointsEntry
     addToPlotEntry = tk.Entry(root, width=20)
@@ -569,6 +658,14 @@ def create_gui(root):
     root.bind('<<UpdateLabel>>', on_update_label)
 
 
+def disconnectStage():
+    XPSStage.GroupKill("XYGroup", str())
+    XPSStage.CloseInstrument()
+    ZAxis.close()
+    KCube.close()
+    root.destroy()
+
+
 def getSelectorIndex():
     text = clicked.get()
     index = options.index(text)
@@ -576,26 +673,37 @@ def getSelectorIndex():
 
 
 def testFunction():
-    messageObject = LabelUpdate(label=2, message="Hello World")
-    messageObject.message = 'Process Done'
-    q.put(messageObject)
-    root.event_generate('<<UpdateLabel>>')
 
+    add_to_plot(3, 4)
+    time.sleep(1)
+    add_to_plot(4, 5)
+    time.sleep(1)
+    add_to_plot(2, 1)
+    time.sleep(1)
+    clearPlotData()
+    time.sleep(1)
+    add_to_plot(2, 1)
+    add_to_plot(6, 3)
     #if not connectToStages():
     #    abort()
+    #    return 0
 
     #if not homeActuators():
     #    abort()
+    #    return 0
 
     #if not moveActuators(1, 1.0):
+    #    print("MoveNotFinishedGood")
     #    abort()
+    #    return 0
 
+    #XPS_VoltageGet(XPSStage)
 
 
 def workThread():
     # Start the worker thread
     abort_event.clear()
-    thread = threading.Thread(target=worker_thread, args=(q, root))
+    thread = threading.Thread(target=startPeakFinding())
     thread.daemon = True  # Daemonize thread to exit with the program
     thread.start()
 
@@ -636,8 +744,6 @@ main
 # TODO
 # disable other buttons when something is happening, maybe make a seperate function for it. using button.config(state="disabled")
 
-now = datetime.datetime.now()
-dt_string = now.strftime("%Y_%m_%d_%H_%M")
 
 global root
 root = tk.Tk()
