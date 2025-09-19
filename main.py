@@ -78,7 +78,6 @@ ReachedOptimum = False
 
 
 # TODO Remove after debugging
-ReferencePower = 1.1
 NumberOfPoints = 35
 CouplingEfficiencyRatio = 0.5
 
@@ -110,38 +109,6 @@ def save_to_csv(directory, filename, listOne, listTwo):
     csvfile.close()
 
 
-# Function to be run in a separate thread (the worker thread)
-def worker_thread(queue, gui_root):
-    # Create object for sending messages to GUI thread
-    messageObject = LabelUpdate(label=1, message='Test')
-    for i in range(1, 11):
-
-        # Abort if abort_event is set, either by abortButton or limit exceeded
-        if abort_event.is_set():
-            messageObject.message = 'Aborted!'
-            queue.put(messageObject)
-            gui_root.event_generate('<<UpdateLabel>>')
-            return
-
-        # Simulate some processing
-        time.sleep(1)
-
-        # Send progress to the GUI thread via the queue
-        messageObject.message = f'Progress: {i * 10}%'
-        queue.put(messageObject)
-        # Generate a custom event to notify the main thread
-        gui_root.event_generate('<<UpdateLabel>>')
-
-
-
-    xAxis = np.arange(0, 20, 0.5).tolist()
-    yAxis = np.random.normal(0, 1, 40)
-    os.makedirs("../" + dt_string + "/")
-    save_to_csv("../" + dt_string + "/output.csv", xAxis, yAxis)
-    # Notify the main thread when the task is complete
-    messageObject.message = 'Process Done'
-    queue.put(messageObject)
-    gui_root.event_generate('<<UpdateLabel>>')
 
 # Event handler to update the label
 def on_update_label(event) -> None:
@@ -230,8 +197,6 @@ def manualVoltageMesurement():
 
 def startPeakFinding():
 
-    ItterationIndex = 0
-    ImprovementRatio = 1
     ImprovementList = [0.0] * MaxNumberOfItteration
     LimitReached = False
     global ReferencePower
@@ -252,15 +217,21 @@ def startPeakFinding():
     BoundaryTable = [XBounaries, YBounaries, ZBounaries, RotBounaries]
     MaximumCoupEff = 0.0
 
+    posFile = open(dt_string + "/PosFile.txt", "w")
+    posFile.write("Itteration, AxisIndex, XPos, YPos, ZPos, RotPos")
     for ItterationIndex in range(MaxNumberOfItteration):
+        if Debugging:
+            print("Starting Itteration Nr:" + str(ItterationIndex))
         if ItterationIndex >= MaxNumberOfItteration or LimitReached:
             break
 
         for Axis in range(4):
             [MaximumCoupEff, BoundaryTable[Axis][0], BoundaryTable[Axis][1]] = measurementRun(lowerLimit=BoundaryTable[Axis][0], upperLimit=BoundaryTable[Axis][1], numberOfPoints=NumberOfPoints, axisIndex=Axis,referencePower=ReferencePower, runNumber=ItterationIndex)
 
+            posFile.write(str(ItterationIndex) + ", " + str(Axis) + ", " + str(PositionList[0]) + ", " + str(PositionList[1]) + ", " + str(PositionList[2]) + ", " + str(PositionList[3]) + ",")
+
             if Debugging:
-                print("Axis:" + Axis + "between " + BoundaryTable[Axis][0] + " and " + BoundaryTable[Axis][1] + " at " + MaximumCoupEff + "% Coupling Efficiency.")
+                print("Axis:" + str(Axis) + "between " + str(BoundaryTable[Axis][0]) + " and " + str(BoundaryTable[Axis][1]) + " at " + str(MaximumCoupEff) + "% Coupling Efficiency.")
 
         if ItterationIndex > MinNumberOfItteration:
             LimitReached = checkImprovement(MaximumCoupEff, ImprovementList[ItterationIndex - 1])
@@ -268,6 +239,7 @@ def startPeakFinding():
 
 
         ImprovementList[ItterationIndex] = MaximumCoupEff
+    posFile.close()
     global OptimumList, ReachedOptimum
     OptimumList = PositionList
     ReachedOptimum = True
@@ -288,6 +260,10 @@ def goToPosition():
 
     index = getSelectorIndex()
     position = float(positionEntry.get())
+
+    if index == 3:
+        position = angleToLength(position)
+
     moveActuators(index, position)
     return 3
 
@@ -297,6 +273,10 @@ def manualMeasurementRun():
     lowerLimit = float(lowerLimitEntry.get())
     upperLimit = float(upperLimitEntry.get())
     axisIndex = getSelectorIndex()
+
+    if axisIndex == 3:
+        lowerLimit = angleToLength(lowerLimit)
+        upperLimit = angleToLength(upperLimit)
     measurementRun(lowerLimit, upperLimit, NumberOfPoints, axisIndex, ReferencePower, "manual")
 
 
@@ -352,7 +332,7 @@ def moveActuators(AxisIndex: int, Position: float):
 
         case 3:
 
-            messageUpdate = LabelUpdate(message="Rot = " + str(Position) + "°", label=AxisIndex + 4)
+            messageUpdate = LabelUpdate(message="Rot = " + str(lengthToAngle(Position)) + "°", label=AxisIndex + 4)
             q.put(messageUpdate)
             root.event_generate('<<UpdateLabel>>')
 
@@ -362,6 +342,19 @@ def moveActuators(AxisIndex: int, Position: float):
 
             return True
 
+
+
+def angleToLength(angle: float):
+
+    length = 0.661641 * angle + 0.0986658
+
+    return length
+
+def lengthToAngle(length: float):
+
+    angle = 1.51053 * length - 0.149123
+
+    return angle
 
 
 def connectToStages():
@@ -468,12 +461,22 @@ def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, ax
 
         add_to_plot(positions[id], coupEff[id])
 
-
+    maximum = max(coupEff)
+    maxIndex = coupEff.index(maximum)
+    maxPosition = positions[maxIndex]
     AxisNames = ["XAxis", "YAxis", "ZAxis", "RotAxis"]
+
+    if axisIndex == 3:
+        temp = positions
+        for id, pos in enumerate(positions):
+            temp[id] = lengthToAngle(pos)
+        positions = temp
+
     save_to_csv(dt_string + "/Run" + runNumber + "/", AxisNames[axisIndex] + ".txt", positions, voltages)
     # TODO maybe also write the fixed coordinates to file for better data analysis
     [LL, UL] = detectPeak(coupEff)
-    maximum = max(coupEff)
+
+    moveActuators(axisIndex, maxPosition)
     return [maximum, LL, UL]
 
 
