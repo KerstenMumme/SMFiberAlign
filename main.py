@@ -13,6 +13,7 @@ import os
 import datetime
 from tkinter import *
 from pylablib.devices import Thorlabs #Thorlabs library
+import statistics
 
 import sys
 import clr
@@ -65,8 +66,8 @@ ZAxisScale = (ZAxisStepsPerMM, ZAxisStepsPerMM * 53.68, ZAxisStepsPerMM / 90.9 /
 
 #Stage and actuator defining
 XPSStage = XPS()
-KCube = Thorlabs.KinesisMotor(str(27262610), scale=KCubeScale)
-ZAxis = Thorlabs.KinesisMotor(str(70292334), is_rack_system=True, scale=ZAxisScale, default_channel=1)
+#KCube = Thorlabs.KinesisMotor(str(27262610), scale=KCubeScale)
+#ZAxis = Thorlabs.KinesisMotor(str(70292334), is_rack_system=True, scale=ZAxisScale, default_channel=1)
 
 #Keeping track of where the stages are
 global PositionList
@@ -101,10 +102,13 @@ YPlotList = []
 
 def save_to_csv(directory, filename, listOne, listTwo):
 
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
     length = len(listOne)
     csvfile = open(directory + "/" + filename + ".csv", 'w', newline='')
     for i in range(length):
-        csvfile.write(listOne[i] + ", " + listTwo[i])
+        csvfile.write(str(listOne[i]) + ", " + str(listTwo[i]) + "\n")
 
     csvfile.close()
 
@@ -188,11 +192,7 @@ def clearPlotData():
 def manualVoltageMesurement():
 
     voltage = XPS_VoltageGet(XPSStage)
-    messageObject = LabelUpdate(label=2, message=str(voltage))
-    q.put(messageObject)
-    root.event_generate('<<UpdateLabel>>')
 
-    return 3
 
 
 def startPeakFinding():
@@ -228,7 +228,7 @@ def startPeakFinding():
         for Axis in range(4):
             [MaximumCoupEff, BoundaryTable[Axis][0], BoundaryTable[Axis][1]] = measurementRun(lowerLimit=BoundaryTable[Axis][0], upperLimit=BoundaryTable[Axis][1], numberOfPoints=NumberOfPoints, axisIndex=Axis,referencePower=ReferencePower, runNumber=ItterationIndex)
 
-            posFile.write(str(ItterationIndex) + ", " + str(Axis) + ", " + str(PositionList[0]) + ", " + str(PositionList[1]) + ", " + str(PositionList[2]) + ", " + str(PositionList[3]) + ",")
+            posFile.write(str(ItterationIndex) + ", " + str(Axis) + ", " + str(PositionList[0]) + ", " + str(PositionList[1]) + ", " + str(PositionList[2]) + ", " + str(lengthToAngle(PositionList[3])) + "\n")
 
             if Debugging:
                 print("Axis:" + str(Axis) + "between " + str(BoundaryTable[Axis][0]) + " and " + str(BoundaryTable[Axis][1]) + " at " + str(MaximumCoupEff) + "% Coupling Efficiency.")
@@ -284,11 +284,9 @@ def manualMeasurementRun():
 def moveActuators(AxisIndex: int, Position: float):
     XPos = PositionList[0]
     YPos = PositionList[1]
-    tempPos = PositionList
 
-    global PositionList
-    PositionList = tempPos
     PositionList[AxisIndex] = Position
+
 
     if not LimitList[AxisIndex].CheckLimit(Position=Position):
         abort()
@@ -299,7 +297,7 @@ def moveActuators(AxisIndex: int, Position: float):
     match AxisIndex:
         case 0:
 
-            messageUpdate = LabelUpdate(message="XPos = " + str(Position) + "mm", label=AxisIndex + 4)
+            messageUpdate = LabelUpdate(message="XPos = " + "{:.2f}".format(Position) + "mm", label=AxisIndex + 4)
             q.put(messageUpdate)
             root.event_generate('<<UpdateLabel>>')
 
@@ -310,7 +308,7 @@ def moveActuators(AxisIndex: int, Position: float):
 
         case 1:
 
-            messageUpdate = LabelUpdate(message="YPos = " + str(Position)+ "mm", label=AxisIndex + 4)
+            messageUpdate = LabelUpdate(message="YPos = " + "{:.2f}".format(Position) + "mm", label=AxisIndex + 4)
             q.put(messageUpdate)
             root.event_generate('<<UpdateLabel>>')
 
@@ -321,7 +319,7 @@ def moveActuators(AxisIndex: int, Position: float):
 
         case 2:
 
-            messageUpdate = LabelUpdate(message="ZPos = " + str(Position) + "mm", label=AxisIndex + 4)
+            messageUpdate = LabelUpdate(message="ZPos = " + "{:.2f}".format(Position) + "mm", label=AxisIndex + 4)
             q.put(messageUpdate)
             root.event_generate('<<UpdateLabel>>')
 
@@ -332,7 +330,7 @@ def moveActuators(AxisIndex: int, Position: float):
 
         case 3:
 
-            messageUpdate = LabelUpdate(message="Rot = " + str(lengthToAngle(Position)) + "°", label=AxisIndex + 4)
+            messageUpdate = LabelUpdate(message="Rot = " + "{:.2f}".format(lengthToAngle(Position)) + "°", label=AxisIndex + 4)
             q.put(messageUpdate)
             root.event_generate('<<UpdateLabel>>')
 
@@ -495,13 +493,20 @@ def XPS_GroupMoveAbsolute(myXPS, TargetPosition, nbItems=2):
 
 #Get Voltage applied to pin XPS RDL Controller
 def XPS_VoltageGet(myXPS):
+    voltageList = [0.0] * 1000
     voltage = [1]
-    result = myXPS.GPIOAnalogGet(["GPIO2.ADC1"], voltage, str())
-    if (result[1])[0] > 10**10:
-        return 0
-    else:
-        return (result[1])[0]
+    for i in range(1000):
+        result = myXPS.GPIOAnalogGet(["GPIO2.ADC1"], voltage, str())
+        if (result[1])[0] > 10**10:
+            voltageList[i] = -10
+        else:
+            voltageList[i] = (result[1])[0]
 
+    messageUpdate = LabelUpdate(message="Measured: " + "{:.2f}".format(statistics.mean(voltageList)) + "V", label=2)
+    q.put(messageUpdate)
+    root.event_generate('<<UpdateLabel>>')
+
+    return statistics.mean(voltageList)
 
 
 
@@ -677,31 +682,18 @@ def getSelectorIndex():
 
 def testFunction():
 
-    add_to_plot(3, 4)
-    time.sleep(1)
-    add_to_plot(4, 5)
-    time.sleep(1)
-    add_to_plot(2, 1)
-    time.sleep(1)
-    clearPlotData()
-    time.sleep(1)
-    add_to_plot(2, 1)
-    add_to_plot(6, 3)
-    #if not connectToStages():
-    #    abort()
-    #    return 0
+    if not connectToStages():
+        abort()
+        return 0
+    now = time.time()
 
-    #if not homeActuators():
-    #    abort()
-    #    return 0
-
-    #if not moveActuators(1, 1.0):
-    #    print("MoveNotFinishedGood")
-    #    abort()
-    #    return 0
-
-    #XPS_VoltageGet(XPSStage)
-
+    voltageList = [0.0] * 1000
+    for i in range(1000):
+        voltageList[i] = XPS_VoltageGet(XPSStage)
+    elapsed = time.time() - now
+    save_to_csv("testFolder", "testVoltages", range(100), voltageList)
+    print("average: " + str(statistics.mean(voltageList)))
+    print("time: " + str(elapsed))
 
 def workThread():
     # Start the worker thread
