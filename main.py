@@ -48,12 +48,10 @@ class LabelUpdate:
 def abort() -> None:
     abort_event.set()
 
-#TODO set the correct limits
-
-XAxisLimit = Limits(LowerLimit=-100, UpperLimit=100)
-YAxisLimit = Limits(LowerLimit=-100, UpperLimit=100)
-ZAxisLimit = Limits(LowerLimit=-100, UpperLimit=100)
-RotAxisLimit = Limits(LowerLimit=-100, UpperLimit=100)
+XAxisLimit = Limits(LowerLimit=-12, UpperLimit=12)
+YAxisLimit = Limits(LowerLimit=-12, UpperLimit=12)
+ZAxisLimit = Limits(LowerLimit=-3.8, UpperLimit=3.8)
+RotAxisLimit = Limits(LowerLimit=-7, UpperLimit=7)
 
 LimitList = [XAxisLimit, YAxisLimit, ZAxisLimit, RotAxisLimit]
 
@@ -66,8 +64,8 @@ ZAxisScale = (ZAxisStepsPerMM, ZAxisStepsPerMM * 53.68, ZAxisStepsPerMM / 90.9 /
 
 #Stage and actuator defining
 XPSStage = XPS()
-#KCube = Thorlabs.KinesisMotor(str(27262610), scale=KCubeScale)
-#ZAxis = Thorlabs.KinesisMotor(str(70292334), is_rack_system=True, scale=ZAxisScale, default_channel=1)
+KCube = Thorlabs.KinesisMotor(str(27262610), scale=KCubeScale)
+ZAxis = Thorlabs.KinesisMotor(str(70292334), is_rack_system=True, scale=ZAxisScale, default_channel=1)
 
 #Keeping track of where the stages are
 global PositionList
@@ -78,7 +76,6 @@ OptimumList = [0.0, 0.0, 0.0, 0.0]
 ReachedOptimum = False
 
 
-# TODO Remove after debugging
 NumberOfPoints = 35
 CouplingEfficiencyRatio = 0.5
 
@@ -223,6 +220,7 @@ def startPeakFinding():
         if Debugging:
             print("Starting Itteration Nr:" + str(ItterationIndex))
         if ItterationIndex >= MaxNumberOfItteration or LimitReached:
+            print("Improvement Limit Reached")
             break
 
         for Axis in range(4):
@@ -231,11 +229,10 @@ def startPeakFinding():
             posFile.write(str(ItterationIndex) + ", " + str(Axis) + ", " + str(PositionList[0]) + ", " + str(PositionList[1]) + ", " + str(PositionList[2]) + ", " + str(lengthToAngle(PositionList[3])) + "\n")
 
             if Debugging:
-                print("Axis:" + str(Axis) + "between " + str(BoundaryTable[Axis][0]) + " and " + str(BoundaryTable[Axis][1]) + " at " + str(MaximumCoupEff) + "% Coupling Efficiency.")
+                print("Axis: " + str(Axis) + " between " + str(BoundaryTable[Axis][0]) + " and " + str(BoundaryTable[Axis][1]) + " at " + str(MaximumCoupEff) + "% Coupling Efficiency.")
 
         if ItterationIndex > MinNumberOfItteration:
             LimitReached = checkImprovement(MaximumCoupEff, ImprovementList[ItterationIndex - 1])
-
 
 
         ImprovementList[ItterationIndex] = MaximumCoupEff
@@ -243,7 +240,7 @@ def startPeakFinding():
     global OptimumList, ReachedOptimum
     OptimumList = PositionList
     ReachedOptimum = True
-
+    save_to_csv(dt_string + "/CEImprovement/", "CEperItteration.txt", range(MaxNumberOfItteration), ImprovementList)
     messageObject = LabelUpdate(label=1, message="FoundOptimum")
     q.put(messageObject)
     root.event_generate('<<UpdateLabel>>')
@@ -253,8 +250,8 @@ def returnToOptimum():
     if ReachedOptimum:
         for i in range(4):
             moveActuators(i, OptimumList[i])
-
-    return 3
+    else:
+        print("Optimum not reached yet, do peak finding first")
 
 def goToPosition():
 
@@ -268,11 +265,12 @@ def goToPosition():
     return 3
 
 def manualMeasurementRun():
+    axisIndex = getSelectorIndex()
+    currentPosition = PositionList[axisIndex]
     global ReferencePower
     ReferencePower = float(referencePowerEntry.get())
-    lowerLimit = float(lowerLimitEntry.get())
-    upperLimit = float(upperLimitEntry.get())
-    axisIndex = getSelectorIndex()
+    lowerLimit = float(currentPosition + lowerLimitEntry.get())
+    upperLimit = float(currentPosition + upperLimitEntry.get())
 
     if axisIndex == 3:
         lowerLimit = angleToLength(lowerLimit)
@@ -289,10 +287,11 @@ def moveActuators(AxisIndex: int, Position: float):
 
 
     if not LimitList[AxisIndex].CheckLimit(Position=Position):
-        abort()
+        print("Limit Error on Axis: " + str(AxisIndex) + ", at position: " + str(Position))
+        disconnectAndClose()
         return False
     if Debugging:
-        print("Moving Actuator Index:" + str(AxisIndex) + "to: " + str(Position))
+        print("Moving Actuator Index: " + str(AxisIndex) + " to: " + str(Position))
 
     match AxisIndex:
         case 0:
@@ -334,7 +333,6 @@ def moveActuators(AxisIndex: int, Position: float):
             q.put(messageUpdate)
             root.event_generate('<<UpdateLabel>>')
 
-            #TODO Implement Angle to Position and vice versa conversion
             KCube.move_to(position=Position)
             KCube.wait_move(timeout=10)
 
@@ -370,7 +368,8 @@ def connectToStages():
     if ZAxis.is_opened() and KCube.is_opened():
         return True
     else:
-        return False
+        print("Error in connecting to Stages")
+        disconnectAndClose()
 
 def homeActuators():
 
@@ -378,8 +377,8 @@ def homeActuators():
     XPSStage.GroupHomeSearch("XYGroup", str())
 
     #Home Z and Rot Axes
-    KCube.setup_homing(velocity=0.75, offset_distance=7.55) #TODO Find correct offsets
-    ZAxis.setup_homing(velocity=0.75, offset_distance=2)
+    KCube.setup_homing(velocity=0.75, offset_distance=7.55)
+    ZAxis.setup_homing(velocity=0.75, offset_distance=4.75)
 
     ZAxis.home(force=True, sync=False)
     KCube.home(force=True, sync=False)
@@ -387,17 +386,18 @@ def homeActuators():
     ZAxis.wait_for_home(timeout=40)
     KCube.wait_for_home(timeout=40)
 
-    #TODO establish correct limit switches, maybe contact thorlabs, or trial and error
-    KCube.setup_limit_switch(hw_kind_cw='ignore', hw_kind_ccw='ignore')
-    ZAxis.setup_limit_switch(hw_kind_cw='ignore', hw_kind_ccw='ignore')
+    KCube.setup_limit_switch(hw_kind_cw='make', hw_kind_ccw='make')
+    ZAxis.setup_limit_switch(hw_kind_cw='make', hw_kind_ccw='ignore')
 
     KCube.setup_velocity(min_velocity=0.0, acceleration=1.0, max_velocity=2.0)
     ZAxis.setup_velocity(min_velocity=0.0, acceleration=1.0, max_velocity=2.0)
 
-    if KCube.is_opened() and KCube.is_opened():
+    if KCube.is_homed() and ZAxis.is_homed():
         return True
     else:
-        return False
+        print("Error in Homing Stages")
+        disconnectAndClose()
+
 
 
 def convertVoltageToCoupEff(voltage: [float], referenceP: float):
@@ -471,7 +471,6 @@ def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, ax
         positions = temp
 
     save_to_csv(dt_string + "/Run" + runNumber + "/", AxisNames[axisIndex] + ".txt", positions, voltages)
-    # TODO maybe also write the fixed coordinates to file for better data analysis
     [LL, UL] = detectPeak(coupEff)
 
     moveActuators(axisIndex, maxPosition)
@@ -531,8 +530,8 @@ def create_gui(root):
     create_plot(plot_frame, t, y)
 
     # Create Label and LabelVars
-    global testLabelVar, voltageLabelVar, referencePowerLabelVar, xPosLabelVar, yPosLabelVar, zPosLabelVar, rotPosLabelVar, unitLabelPosVar, unitLabelLLVar, unitLabelULVar
-    global testLabel, voltageLabel, referencePowerLabel, xPosLabel, yPosLabel, zPosLabel, rotPosLabel, unitLabelPos, unitLabelLL, unitLabelUL
+    global voltageLabelVar, referencePowerLabelVar, xPosLabelVar, yPosLabelVar, zPosLabelVar, rotPosLabelVar, unitLabelPosVar, unitLabelLLVar, unitLabelULVar
+    global voltageLabel, referencePowerLabel, xPosLabel, yPosLabel, zPosLabel, rotPosLabel, unitLabelPos, unitLabelLL, unitLabelUL
 
     # Assign standard values
     testLabelVar = tk.StringVar(root, "TestLabel")
@@ -542,13 +541,11 @@ def create_gui(root):
     yPosLabelVar = tk.StringVar(root, "YPos = 0 mm")
     zPosLabelVar = tk.StringVar(root, "ZPos = 0 mm")
     rotPosLabelVar = tk.StringVar(root, "Rot = 0 °")
-    unitLabelPosVar = tk.StringVar(root, "mm")
-    unitLabelLLVar = tk.StringVar(root, "mm")
-    unitLabelULVar = tk.StringVar(root, "mm")
+    unitLabelPosVar = tk.StringVar(root, "mm/°")
+    unitLabelLLVar = tk.StringVar(root, "mm/°")
+    unitLabelULVar = tk.StringVar(root, "mm/°")
 
     #Create Label elements and place them on the grid
-    testLabel = tk.Label(root, textvariable=testLabelVar, font=("Arial", 14))
-    testLabel.grid(row=16, column=3, padx=5)
 
     voltageLabel = tk.Label(root, textvariable=voltageLabelVar, font=("Arial", 14))
     voltageLabel.grid(row=0, column=2, padx=5)
@@ -586,9 +583,8 @@ def create_gui(root):
     numberOfPointsTextLabel = tk.Label(root, text="Number of points:", font=("Arial", 14))
     numberOfPointsTextLabel.grid(row=12, column=1, padx=5)
 
-    global abortButton, manualVoltageButton, homeActuatorsButton, peakFindingButton, returnToOptimumButton, goToPosButton, startMeasurementRunButton, inputButton, startWorkerThreadButton, disconnectStagesButton
-    abortButton = tk.Button(root, text="ABORT!", command=abort)
-    abortButton.grid(row=0, column=3)
+    global manualVoltageButton, homeActuatorsButton, peakFindingButton, returnToOptimumButton, goToPosButton, startMeasurementRunButton, disconnectStagesButton
+
 
     manualVoltageButton = tk.Button(root, text="Manual Voltage Measurement", command=manualVoltageMesurement)
     manualVoltageButton.grid(row=0, column=1)
@@ -597,35 +593,27 @@ def create_gui(root):
     connectToStagesButton.grid(row=2, column=1)
 
     homeActuatorsButton = tk.Button(root, text="Home Actuators", command=homeActuators)
-    homeActuatorsButton.grid(row=5, column=3)
+    homeActuatorsButton.grid(row=3, column=2)
 
-    peakFindingButton = tk.Button(root, text="Start peak finding", command=workThread)
+    peakFindingButton = tk.Button(root, text="Start peak finding", command=startPeakFindingThread)
     peakFindingButton.grid(row=2, column=3)
 
     returnToOptimumButton = tk.Button(root, text="Return to optimum", command=returnToOptimum)
-    returnToOptimumButton.grid(row=6, column=3)
+    returnToOptimumButton.grid(row=5, column=3)
 
     goToPosButton = tk.Button(root, text="Go to position", command=goToPosition)
     goToPosButton.grid(row=15, column=1)
 
-    startMeasurementRunButton = tk.Button(root, text="Start measurement run", command=manualMeasurementRun)
+    startMeasurementRunButton = tk.Button(root, text="Start measurement run", command=startManualMeasurementRunThread)
     startMeasurementRunButton.grid(row=9, column=1)
-
-    inputButton = tk.Button(root, text="INPUT!", command=lambda: add_to_plot())
-    inputButton.grid(row=15)
-
-    startWorkerThreadButton = tk.Button(root, text="Start Worker Thread", command=workThread)
-    startWorkerThreadButton.grid(row=16)
 
     testButton = tk.Button(root, text="Test Button", command=testFunction)
     testButton.grid(row=17)
 
-    disconnectStagesButton = tk.Button(root, text="Exit", command=disconnectStage)
-    disconnectStagesButton.grid(row=17, column=3)
+    disconnectStagesButton = tk.Button(root, text="Exit", command=disconnectAndClose)
+    disconnectStagesButton.grid(row=0, column=3)
 
-    global addToPlotEntry, referencePowerEntry, lowerLimitEntry, upperLimitEntry, positionEntry, numberOfPointsEntry
-    addToPlotEntry = tk.Entry(root, width=20)
-    addToPlotEntry.grid(row=14)
+    global referencePowerEntry, lowerLimitEntry, upperLimitEntry, positionEntry, numberOfPointsEntry
 
     referencePowerEntry = tk.Entry(root, width=20)
     referencePowerEntry.grid(row=1, column=3)
@@ -660,13 +648,10 @@ def create_gui(root):
     AxisSelectorMenue = OptionMenu(root, clicked, *options)
     AxisSelectorMenue.grid(row=9, column=2)
 
-    # TODO
-    # Find a change option event, to change unit to degree when Rotation axis is selected, or just rename unit to mm/deg
-
     root.bind('<<UpdateLabel>>', on_update_label)
 
 
-def disconnectStage():
+def disconnectAndClose():
     XPSStage.GroupKill("XYGroup", str())
     XPSStage.CloseInstrument()
     ZAxis.close()
@@ -681,24 +666,24 @@ def getSelectorIndex():
 
 
 def testFunction():
+    for i in range(10):
+        moveActuators(2, 0)
+        time.sleep(7)
+        moveActuators(2, 1)
+        time.sleep(7)
+        moveActuators(2, 2)
+        time.sleep(7)
+        moveActuators(2, 3)
+        time.sleep(7)
 
-    if not connectToStages():
-        abort()
-        return 0
-    now = time.time()
 
-    voltageList = [0.0] * 1000
-    for i in range(1000):
-        voltageList[i] = XPS_VoltageGet(XPSStage)
-    elapsed = time.time() - now
-    save_to_csv("testFolder", "testVoltages", range(100), voltageList)
-    print("average: " + str(statistics.mean(voltageList)))
-    print("time: " + str(elapsed))
-
-def workThread():
-    # Start the worker thread
-    abort_event.clear()
+def startPeakFindingThread():
     thread = threading.Thread(target=startPeakFinding())
+    thread.daemon = True  # Daemonize thread to exit with the program
+    thread.start()
+
+def startManualMeasurementRunThread():
+    thread = threading.Thread(target=manualMeasurementRun())
     thread.daemon = True  # Daemonize thread to exit with the program
     thread.start()
 
@@ -725,26 +710,13 @@ def connectToXPSStage(myXPS):
 main
 """
 
-# TODO
-# Create a close button, that also properly disconnects from the stages. The thorlabs one was funny if I remember correctly
-
-
-# TODO
-# Maybe include a relative or absolute selector, for the measurement run option to be around the optimum
-
-
-# TODO
-# make a error checking function, just a simple number check and throw error and suicide
-
-# TODO
-# disable other buttons when something is happening, maybe make a seperate function for it. using button.config(state="disabled")
 
 
 global root
 root = tk.Tk()
 root.title("Fiber Coupling Project")
 root.geometry("10000x60000")  # set starting size of window
-root.maxsize(1000, 600)  # width x height
+root.maxsize(1000, 500)  # width x height
 
 create_gui(root)
 
