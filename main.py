@@ -673,13 +673,13 @@ def testFunction():
 
 
 def startPeakFindingThread():
-    thread = threading.Thread(target=startPeakFinding())
-    thread.daemon = True  # Daemonize thread to exit with the program
+    thread = threading.Thread(target=startPeakFinding)
+    thread.daemon = True
     thread.start()
 
 def startManualMeasurementRunThread():
-    thread = threading.Thread(target=manualMeasurementRun())
-    thread.daemon = True  # Daemonize thread to exit with the program
+    thread = threading.Thread(target=manualMeasurementRun)
+    thread.daemon = True
     thread.start()
 
 
