@@ -59,8 +59,8 @@ ZAxisScale = (ZAxisStepsPerMM, ZAxisStepsPerMM * 53.68, ZAxisStepsPerMM / 90.9 /
 
 #Stage and actuator defining
 XPSStage = XPS()
-KCube = Thorlabs.KinesisMotor(str(27262610), scale=KCubeScale)
-ZAxis = Thorlabs.KinesisMotor(str(70292334), is_rack_system=True, scale=ZAxisScale, default_channel=1)
+#KCube = Thorlabs.KinesisMotor(str(27262610), scale=KCubeScale)
+#ZAxis = Thorlabs.KinesisMotor(str(70292334), is_rack_system=True, scale=ZAxisScale, default_channel=1)
 
 #Keeping track of where the stages are
 global PositionList
@@ -223,7 +223,7 @@ def startPeakFinding():
             [MaximumCoupEff, BoundaryTable[Axis][0], BoundaryTable[Axis][1]] = measurementRun(lowerLimit=BoundaryTable[Axis][0], upperLimit=BoundaryTable[Axis][1], numberOfPoints=NumberOfPoints, axisIndex=Axis,referencePower=ReferencePower, runNumber=ItterationIndex)
 
             posFile.write(str(ItterationIndex) + ", " + str(Axis) + ", " + str(PositionList[0]) + ", " + str(PositionList[1]) + ", " + str(PositionList[2]) + ", " + str(lengthToAngle(PositionList[3])) + "\n")
-            #TODO Boundary detection still funky, idk, check log from friday
+
             if Debugging:
                 print("Axis: " + str(Axis) + " between " + str(BoundaryTable[Axis][0]) + " and " + str(BoundaryTable[Axis][1]) + " at " + str(MaximumCoupEff) + "% Coupling Efficiency.")
 
@@ -471,16 +471,24 @@ def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, ax
     save_to_csv(dt_string + "/Run" + str(runNumber) + "/", str(AxisNames[axisIndex]), positions, voltages)
     [LL, UL] = detectPeak(coupEff)
 
-    # Check if the limits are the first or last two
-    if LL <= 1:
-        newLowerLimit = lowerLimit - 0.5
-    else:
-        newLowerLimit = positions[LL]
+    # Check if limits are either too narrow, of at the left or right edge of the range
+    narrowPeak = abs(LL - UL) <= 1
+    lowerFlank = LL <= 1
+    upperFlank = UL >= (NumberOfPoints - 2)
 
-    if UL >= (NumberOfPoints - 2):
-        newUpperLimit = upperLimit + 0.5
-    else:
-        newUpperLimit = positions[UL]
+    newLowerLimit = positions[LL]
+    newUpperLimit = positions[UL]
+
+    if narrowPeak:
+        newLowerLimit = positions[LL] - 0.2
+        newUpperLimit = positions[UL] + 0.2
+
+    if lowerFlank:
+        newLowerLimit = positions[LL] - 0.5
+
+    if upperFlank:
+        newUpperLimit = positions[UL] + 0.5
+
 
     moveActuators(axisIndex, maxPosition)
 
@@ -517,7 +525,6 @@ def linspace(lower_limit, upper_limit, num_points):
     points = [lower_limit + i * (upper_limit - lower_limit) / (num_points - 1) for i in range(num_points)]
     return points
 
-#TODO CHeck if linspace actually makes correct fit, including the limits and all
 
 def create_gui(root):
     # Create a frame to hold the plot
@@ -668,8 +675,6 @@ def getSelectorIndex():
 
 
 def testFunction():
-
-    XPS_VoltageGet(XPSStage)
 
 
 def startPeakFindingThread():
