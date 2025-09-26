@@ -23,9 +23,6 @@ from CommandInterfaceXPS import XPS
 
 
 
-# Create abort_event
-abort_event = threading.Event()
-
 #Class for holding the limit information, and performing the software limit checking
 class Limits:
     def __init__(self, LowerLimit: float, UpperLimit: float):
@@ -44,9 +41,7 @@ class LabelUpdate:
     label: int
     message: any
 
-# Define what to do when the abort Button is pressed
-def abort() -> None:
-    abort_event.set()
+
 
 XAxisLimit = Limits(LowerLimit=-12, UpperLimit=12)
 YAxisLimit = Limits(LowerLimit=-12, UpperLimit=12)
@@ -119,8 +114,6 @@ def on_update_label(event) -> None:
         message = q.get_nowait()
 
         match message.label:
-            case 1:
-                testLabelVar.set(message.message)
             case 2:
                 voltageLabelVar.set(message.message)
             case 3:
@@ -140,8 +133,7 @@ def on_update_label(event) -> None:
             case 10:
                 unitLabelULVar.set(message.message)
             case _:
-                testLabelVar.set("WeirdIndex")
-
+                return
     except queue.Empty:
         pass
 
@@ -193,11 +185,15 @@ def manualVoltageMesurement():
 
 
 def startPeakFinding():
-
+#TODO Add broadening of the limits, if they only span one or two datapoints
     ImprovementList = [0.0] * MaxNumberOfItteration
     LimitReached = False
     global ReferencePower
-    ReferencePower = float(referencePowerEntry.get())
+    if referencePowerEntry.get() == '':
+        print("No Reference Power Given")
+        return
+    else:
+        ReferencePower = float(referencePowerEntry.get())
 
     XBounaries = [-1, 1]
     XBounaries = [x + PositionList[0] for x in XBounaries]
@@ -205,15 +201,15 @@ def startPeakFinding():
     YBounaries = [-1, 1]
     YBounaries = [x + PositionList[1] for x in YBounaries]
 
-    ZBounaries = [-3, 3]
+    ZBounaries = [-1, 1]
     ZBounaries = [x + PositionList[2] for x in ZBounaries]
 
-    RotBounaries = [-3, 1]
+    RotBounaries = [-1, 1]
     RotBounaries = [x + PositionList[3] for x in RotBounaries]
 
     BoundaryTable = [XBounaries, YBounaries, ZBounaries, RotBounaries]
     MaximumCoupEff = 0.0
-
+    #TODO Set limit for height axis to 5mm, as then the stage hits the lens
     posFile = open(dt_string + "/PosFile.txt", "w")
     posFile.write("Itteration, AxisIndex, XPos, YPos, ZPos, RotPos")
     for ItterationIndex in range(MaxNumberOfItteration):
@@ -227,7 +223,7 @@ def startPeakFinding():
             [MaximumCoupEff, BoundaryTable[Axis][0], BoundaryTable[Axis][1]] = measurementRun(lowerLimit=BoundaryTable[Axis][0], upperLimit=BoundaryTable[Axis][1], numberOfPoints=NumberOfPoints, axisIndex=Axis,referencePower=ReferencePower, runNumber=ItterationIndex)
 
             posFile.write(str(ItterationIndex) + ", " + str(Axis) + ", " + str(PositionList[0]) + ", " + str(PositionList[1]) + ", " + str(PositionList[2]) + ", " + str(lengthToAngle(PositionList[3])) + "\n")
-
+            #TODO Boundary detection still funky, idk, check log from friday
             if Debugging:
                 print("Axis: " + str(Axis) + " between " + str(BoundaryTable[Axis][0]) + " and " + str(BoundaryTable[Axis][1]) + " at " + str(MaximumCoupEff) + "% Coupling Efficiency.")
 
@@ -240,7 +236,7 @@ def startPeakFinding():
     global OptimumList, ReachedOptimum
     OptimumList = PositionList
     ReachedOptimum = True
-    save_to_csv(dt_string + "/CEImprovement/", "CEperItteration.txt", range(MaxNumberOfItteration), ImprovementList)
+    save_to_csv(dt_string + "/CEImprovement/", "CEperItteration", range(MaxNumberOfItteration), ImprovementList)
     messageObject = LabelUpdate(label=1, message="FoundOptimum")
     q.put(messageObject)
     root.event_generate('<<UpdateLabel>>')
@@ -267,14 +263,16 @@ def goToPosition():
 def manualMeasurementRun():
     axisIndex = getSelectorIndex()
     currentPosition = PositionList[axisIndex]
+    lowerLimit = currentPosition + float(lowerLimitEntry.get())
+    upperLimit = currentPosition + float(upperLimitEntry.get())
+
     global ReferencePower
     ReferencePower = float(referencePowerEntry.get())
-    lowerLimit = float(currentPosition + lowerLimitEntry.get())
-    upperLimit = float(currentPosition + upperLimitEntry.get())
 
     if axisIndex == 3:
         lowerLimit = angleToLength(lowerLimit)
         upperLimit = angleToLength(upperLimit)
+
     measurementRun(lowerLimit, upperLimit, NumberOfPoints, axisIndex, ReferencePower, "manual")
 
 
@@ -357,7 +355,7 @@ def connectToStages():
 
     #Connect to XPS Stage
     if not connectToXPSStage(XPSStage):
-        abort()
+        disconnectAndClose()
 
     #Connect to Thorlabs
     ZAxis.open()
@@ -449,13 +447,13 @@ def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, ax
     coupEff = [0.0] * numberOfPoints
     for id, pos in enumerate(positions):
         if not moveActuators(axisIndex, pos):
-            abort()
+            disconnectAndClose()
             break
         voltages[id] = XPS_VoltageGet(XPSStage)
         coupEff[id] = convertVoltageToCoupEff(voltages[id], referencePower)
 
         if Debugging:
-            print("Voltage: " + str(coupEff[id]))
+            print("Coupling Efficiency: " + str(coupEff[id]))
 
         add_to_plot(positions[id], coupEff[id])
 
@@ -470,23 +468,26 @@ def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, ax
             temp[id] = lengthToAngle(pos)
         positions = temp
 
-    save_to_csv(dt_string + "/Run" + runNumber + "/", AxisNames[axisIndex] + ".txt", positions, voltages)
+    save_to_csv(dt_string + "/Run" + str(runNumber) + "/", str(AxisNames[axisIndex]), positions, voltages)
     [LL, UL] = detectPeak(coupEff)
 
-    moveActuators(axisIndex, maxPosition)
-    return [maximum, LL, UL]
-
-
-# Move the XY Stage to a position
-def XPS_GroupMoveAbsolute(myXPS, TargetPosition, nbItems=2):
-
-    GroupName = "XYGroup"
-    result = myXPS.GroupMoveAbsolute(GroupName, TargetPosition, nbItems, str())
-    if result == 0:
-        return True
+    # Check if the limits are the first or last two
+    if LL <= 1:
+        newLowerLimit = lowerLimit - 0.5
     else:
-        return False
+        newLowerLimit = positions[LL]
 
+    if UL >= (NumberOfPoints - 2):
+        newUpperLimit = upperLimit + 0.5
+    else:
+        newUpperLimit = positions[UL]
+
+    moveActuators(axisIndex, maxPosition)
+
+    if Debugging:
+        print(str(maxPosition))
+
+    return [maximum, newLowerLimit, newUpperLimit]
 
 
 
@@ -496,10 +497,11 @@ def XPS_VoltageGet(myXPS):
     voltage = [1]
     for i in range(1000):
         result = myXPS.GPIOAnalogGet(["GPIO2.ADC1"], voltage, str())
-        if (result[1])[0] > 10**10:
+        if (result[1])[0] > 100:
             voltageList[i] = -10
         else:
             voltageList[i] = (result[1])[0]
+            #TODO Fix E308 Voltage Bug, or better filter it, maybe Recursive
 
     messageUpdate = LabelUpdate(message="Measured: " + "{:.2f}".format(statistics.mean(voltageList)) + "V", label=2)
     q.put(messageUpdate)
@@ -515,7 +517,7 @@ def linspace(lower_limit, upper_limit, num_points):
     points = [lower_limit + i * (upper_limit - lower_limit) / (num_points - 1) for i in range(num_points)]
     return points
 
-
+#TODO CHeck if linspace actually makes correct fit, including the limits and all
 
 def create_gui(root):
     # Create a frame to hold the plot
@@ -666,15 +668,8 @@ def getSelectorIndex():
 
 
 def testFunction():
-    for i in range(10):
-        moveActuators(2, 0)
-        time.sleep(7)
-        moveActuators(2, 1)
-        time.sleep(7)
-        moveActuators(2, 2)
-        time.sleep(7)
-        moveActuators(2, 3)
-        time.sleep(7)
+
+    XPS_VoltageGet(XPSStage)
 
 
 def startPeakFindingThread():
@@ -704,11 +699,6 @@ def connectToXPSStage(myXPS):
         return False
     return True
 
-
-
-"""
-main
-"""
 
 
 
