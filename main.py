@@ -59,8 +59,8 @@ ZAxisScale = (ZAxisStepsPerMM, ZAxisStepsPerMM * 53.68, ZAxisStepsPerMM / 90.9 /
 
 #Stage and actuator defining
 XPSStage = XPS()
-#KCube = Thorlabs.KinesisMotor(str(27262610), scale=KCubeScale)
-#ZAxis = Thorlabs.KinesisMotor(str(70292334), is_rack_system=True, scale=ZAxisScale, default_channel=1)
+KCube = Thorlabs.KinesisMotor(str(27262610), scale=KCubeScale)
+ZAxis = Thorlabs.KinesisMotor(str(70292334), is_rack_system=True, scale=ZAxisScale, default_channel=1)
 
 #Keeping track of where the stages are
 global PositionList
@@ -355,6 +355,7 @@ def connectToStages():
 
     #Connect to XPS Stage
     if not connectToXPSStage(XPSStage):
+        print("XPS not connected")
         disconnectAndClose()
 
     #Connect to Thorlabs
@@ -416,16 +417,18 @@ def detectPeak(coupEff: [float]):
 
     length = len(coupEff)
     maximum = max(coupEff)
+    minimum = min(coupEff)
+
     lowerBoundary = 0
     upperBoundary = 0
 
     for id, ce in enumerate(coupEff):
-        if (ce / maximum) > CouplingEfficiencyRatio:
+        if ((ce - minimum) / (maximum - minimum)) > CouplingEfficiencyRatio:
             lowerBoundary = id
             break
 
     for id, ce in enumerate(reversed(coupEff)):
-        if (ce / maximum) > CouplingEfficiencyRatio:
+        if ((ce - minimum) / (maximum - minimum)) > CouplingEfficiencyRatio:
             upperBoundary = length - 1 - id
             break
 
@@ -475,6 +478,9 @@ def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, ax
     narrowPeak = abs(LL - UL) <= 1
     lowerFlank = LL <= 1
     upperFlank = UL >= (NumberOfPoints - 2)
+
+    if Debugging:
+        print("Narrow Peak: " + str(narrowPeak) + " LowerFlank: " + str(lowerFlank) + " upperFlank: " + str(upperFlank))
 
     newLowerLimit = positions[LL]
     newUpperLimit = positions[UL]
@@ -602,7 +608,7 @@ def create_gui(root):
     connectToStagesButton.grid(row=2, column=1)
 
     homeActuatorsButton = tk.Button(root, text="Home Actuators", command=homeActuators)
-    homeActuatorsButton.grid(row=3, column=2)
+    homeActuatorsButton.grid(row=2, column=2)
 
     peakFindingButton = tk.Button(root, text="Start peak finding", command=startPeakFindingThread)
     peakFindingButton.grid(row=2, column=3)
@@ -675,7 +681,8 @@ def getSelectorIndex():
 
 
 def testFunction():
-
+    vector = linspace(-1,1,35)
+    print(vector)
 
 def startPeakFindingThread():
     thread = threading.Thread(target=startPeakFinding)
@@ -693,17 +700,24 @@ def connectToXPSStage(myXPS):
     # Connecting to XPS RDL controller for X and Y axis
     address = "192.168.0.254"
     port = 5001
-    timeout = 1000
+    timeout = 10000
 
     result = myXPS.OpenInstrument(address, port, timeout)
+
     if result != 0:
+        print("Not Opened XPS")
         return False
 
+    #result = myXPS.KillAll()
+    #print("Killing result: " + str(result))
+
     result = myXPS.GroupInitialize("XYGroup", str())
-    if result != 0:
+    if result[0] != 0:
+        print("Not initialized group: " + str(result[0]))
         return False
     return True
 
+#TODO Figure out why GroupInit now returns two things
 
 
 
