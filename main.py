@@ -41,9 +41,9 @@ class LabelUpdate:
     label: int
     message: any
 
+#TODO Fix DC offset on CE and Fix plateau detection
 
-
-XAxisLimit = Limits(LowerLimit=-12, UpperLimit=12)
+XAxisLimit = Limits(LowerLimit=-12, UpperLimit=5)
 YAxisLimit = Limits(LowerLimit=-12, UpperLimit=12)
 ZAxisLimit = Limits(LowerLimit=-3.8, UpperLimit=3.8)
 RotAxisLimit = Limits(LowerLimit=-7, UpperLimit=7)
@@ -75,7 +75,7 @@ NumberOfPoints = 35
 CouplingEfficiencyRatio = 0.5
 
 NumberOfDataPoints = 35
-MaxNumberOfItteration = 20
+MaxNumberOfItteration = 40
 MinNumberOfItteration = 5
 ImprovementLimit = 0.02
 
@@ -87,6 +87,7 @@ global dt_string
 dt_string = now.strftime("%Y_%m_%d_%H_%M")
 if not os.path.exists(dt_string):
     os.makedirs(dt_string)
+
 
 #PlotLists
 XPlotList = []
@@ -114,6 +115,8 @@ def on_update_label(event) -> None:
         message = q.get_nowait()
 
         match message.label:
+            case 1:
+                ax.set_title(message.message)
             case 2:
                 voltageLabelVar.set(message.message)
             case 3:
@@ -132,6 +135,10 @@ def on_update_label(event) -> None:
                 unitLabelLLVar.set(message.message)
             case 10:
                 unitLabelULVar.set(message.message)
+            case 11:
+                currentlyRunningLabelVar.set(message.message)
+            case 12:
+                statusLabelVar.set(message.message)
             case _:
                 return
     except queue.Empty:
@@ -142,6 +149,7 @@ def on_update_label(event) -> None:
 def create_plot(frame, x, y):
     # Create a matplotlib figure and plot
     fig = Figure(figsize=(5, 4), dpi=100)
+    global ax
     ax = fig.add_subplot(111)
 
     # Sample plot (a simple sine wave)
@@ -180,12 +188,16 @@ def clearPlotData():
 
 def manualVoltageMesurement():
 
-    voltage = XPS_VoltageGet(XPSStage)
+    XPS_VoltageGet(XPSStage)
 
 
 
 def startPeakFinding():
-#TODO Add broadening of the limits, if they only span one or two datapoints
+
+    messageUpdate = LabelUpdate(11, "Peak Finding")
+    q.put(messageUpdate)
+    root.event_generate('<<UpdateLabel>>')
+
     ImprovementList = [0.0] * MaxNumberOfItteration
     LimitReached = False
     global ReferencePower
@@ -204,23 +216,34 @@ def startPeakFinding():
     ZBounaries = [-1, 1]
     ZBounaries = [x + PositionList[2] for x in ZBounaries]
 
-    RotBounaries = [-1, 1]
+    RotBounaries = [angleToLength(-1), angleToLength(1)]
     RotBounaries = [x + PositionList[3] for x in RotBounaries]
 
     BoundaryTable = [XBounaries, YBounaries, ZBounaries, RotBounaries]
     MaximumCoupEff = 0.0
-    #TODO Set limit for height axis to 5mm, as then the stage hits the lens
+
     posFile = open(dt_string + "/PosFile.txt", "w")
     posFile.write("Itteration, AxisIndex, XPos, YPos, ZPos, RotPos")
     for ItterationIndex in range(MaxNumberOfItteration):
+
         if Debugging:
             print("Starting Itteration Nr:" + str(ItterationIndex))
+
         if ItterationIndex >= MaxNumberOfItteration or LimitReached:
-            print("Improvement Limit Reached")
+            if LimitReached:
+                print("Improvement Limit Reached")
+            if ItterationIndex >= MaxNumberOfItteration:
+                print("Max Number of Itterations Reached")
             break
 
         for Axis in range(4):
-            [MaximumCoupEff, BoundaryTable[Axis][0], BoundaryTable[Axis][1]] = measurementRun(lowerLimit=BoundaryTable[Axis][0], upperLimit=BoundaryTable[Axis][1], numberOfPoints=NumberOfPoints, axisIndex=Axis,referencePower=ReferencePower, runNumber=ItterationIndex)
+            RecursionDepth = 0
+
+            messageUpdate = LabelUpdate(12, "Run: "+ str(ItterationIndex) + ", Axis: " + options[Axis])
+            q.put(messageUpdate)
+            root.event_generate('<<UpdateLabel>>')
+
+            [MaximumCoupEff, BoundaryTable[Axis][0], BoundaryTable[Axis][1]] = measurementRun(lowerLimit=BoundaryTable[Axis][0], upperLimit=BoundaryTable[Axis][1], numberOfPoints=NumberOfPoints, axisIndex=Axis,referencePower=ReferencePower, runNumber=ItterationIndex, recursionDepth=RecursionDepth)
 
             posFile.write(str(ItterationIndex) + ", " + str(Axis) + ", " + str(PositionList[0]) + ", " + str(PositionList[1]) + ", " + str(PositionList[2]) + ", " + str(lengthToAngle(PositionList[3])) + "\n")
 
@@ -237,8 +260,9 @@ def startPeakFinding():
     OptimumList = PositionList
     ReachedOptimum = True
     save_to_csv(dt_string + "/CEImprovement/", "CEperItteration", range(MaxNumberOfItteration), ImprovementList)
-    messageObject = LabelUpdate(label=1, message="FoundOptimum")
-    q.put(messageObject)
+
+    messageUpdate = LabelUpdate(11, "Free ")
+    q.put(messageUpdate)
     root.event_generate('<<UpdateLabel>>')
 
 
@@ -261,6 +285,11 @@ def goToPosition():
     return 3
 
 def manualMeasurementRun():
+
+    messageUpdate = LabelUpdate(11, "Measurement Run ")
+    q.put(messageUpdate)
+    root.event_generate('<<UpdateLabel>>')
+
     axisIndex = getSelectorIndex()
     currentPosition = PositionList[axisIndex]
     lowerLimit = currentPosition + float(lowerLimitEntry.get())
@@ -273,8 +302,11 @@ def manualMeasurementRun():
         lowerLimit = angleToLength(lowerLimit)
         upperLimit = angleToLength(upperLimit)
 
-    measurementRun(lowerLimit, upperLimit, NumberOfPoints, axisIndex, ReferencePower, "manual")
+    measurementRun(lowerLimit, upperLimit, NumberOfPoints, axisIndex, ReferencePower, "manual", recursionDepth=0)
 
+    messageUpdate = LabelUpdate(11, "Free")
+    q.put(messageUpdate)
+    root.event_generate('<<UpdateLabel>>')
 
 
 def moveActuators(AxisIndex: int, Position: float):
@@ -372,15 +404,15 @@ def connectToStages():
 
 def homeActuators():
 
-    #Home XPS Stage
-    XPSStage.GroupHomeSearch("XYGroup", str())
-
     #Home Z and Rot Axes
     KCube.setup_homing(velocity=0.75, offset_distance=7.55)
     ZAxis.setup_homing(velocity=0.75, offset_distance=4.75)
 
     ZAxis.home(force=True, sync=False)
     KCube.home(force=True, sync=False)
+
+    #Home XPS Stage
+    XPSStage.GroupHomeSearch("XYGroup", str())
 
     ZAxis.wait_for_home(timeout=40)
     KCube.wait_for_home(timeout=40)
@@ -401,8 +433,8 @@ def homeActuators():
 
 def convertVoltageToCoupEff(voltage: [float], referenceP: float):
 
-    coupEff = (convertVoltageToPower(voltage) / referenceP) * 100
-
+    coupEff = ((convertVoltageToPower(voltage) / referenceP) * 100) - 0.45 - 0.035
+    #TODO Remove - 0.45 when the peak detection is fixed
     return coupEff
 
 
@@ -442,8 +474,12 @@ def checkImprovement(currentCoupEff: float, oldCoupEff: float):
     else:
         return False
 
-def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, axisIndex: int, referencePower: float, runNumber: any):
+def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, axisIndex: int, referencePower: float, runNumber: any, recursionDepth: int):
     clearPlotData()
+
+    messageUpdate = LabelUpdate(1, "Coupling Efficiency on " + options[axisIndex] + "on run Number: " + str(runNumber))
+    q.put(messageUpdate)
+    root.event_generate('<<UpdateLabel>>')
 
     positions = linspace(lowerLimit, upperLimit, numberOfPoints)
     voltages = [0.0] * numberOfPoints
@@ -459,6 +495,7 @@ def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, ax
             print("Coupling Efficiency: " + str(coupEff[id]))
 
         add_to_plot(positions[id], coupEff[id])
+
 
     maximum = max(coupEff)
     maxIndex = coupEff.index(maximum)
@@ -484,22 +521,31 @@ def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, ax
 
     newLowerLimit = positions[LL]
     newUpperLimit = positions[UL]
+    #TODO Change from recursively repeating the measurements to appending a second measurement run to them, in the direction that is missing.
+    #TODO For dataanalysis I need to sort the data
+    RecursionExpansion = [[0.05, 0.05], [0.05, 0.05], [0.3, 0.3], [angleToLength(0.5), angleToLength(0.5)]]
+    RecursionDepthFactor = [1, 0.9, 0.8, 0.7, 0.6, 0.5]
+    if recursionDepth < 5:
+        if narrowPeak:
+            if Debugging:
+                print("Narrow Peak detected on Axis: " + str(axisIndex))
+            return measurementRun(positions[LL] - RecursionExpansion[axisIndex][0], positions[UL] + RecursionExpansion[axisIndex][0], numberOfPoints, axisIndex, referencePower, runNumber, recursionDepth + 1)
 
-    if narrowPeak:
-        newLowerLimit = positions[LL] - 0.2
-        newUpperLimit = positions[UL] + 0.2
+        if lowerFlank:
+            if Debugging:
+                print("Lower Flank detected on Axis: " + str(axisIndex))
+            return measurementRun(lowerLimit - (RecursionExpansion[axisIndex][1] * RecursionDepthFactor[recursionDepth]), upperLimit, numberOfPoints, axisIndex, referencePower, runNumber, recursionDepth + 1)
 
-    if lowerFlank:
-        newLowerLimit = positions[LL] - 0.5
-
-    if upperFlank:
-        newUpperLimit = positions[UL] + 0.5
-
+        if upperFlank:
+            if Debugging:
+                print("Lower Flank detected on Axis: " + str(axisIndex))
+            return measurementRun(lowerLimit, upperLimit + (RecursionExpansion[axisIndex][1] * RecursionDepthFactor[recursionDepth]), numberOfPoints, axisIndex, referencePower, runNumber, recursionDepth + 1)
 
     moveActuators(axisIndex, maxPosition)
 
     if Debugging:
         print(str(maxPosition))
+
 
     return [maximum, newLowerLimit, newUpperLimit]
 
@@ -545,8 +591,8 @@ def create_gui(root):
     create_plot(plot_frame, t, y)
 
     # Create Label and LabelVars
-    global voltageLabelVar, referencePowerLabelVar, xPosLabelVar, yPosLabelVar, zPosLabelVar, rotPosLabelVar, unitLabelPosVar, unitLabelLLVar, unitLabelULVar
-    global voltageLabel, referencePowerLabel, xPosLabel, yPosLabel, zPosLabel, rotPosLabel, unitLabelPos, unitLabelLL, unitLabelUL
+    global voltageLabelVar, referencePowerLabelVar, xPosLabelVar, yPosLabelVar, zPosLabelVar, rotPosLabelVar, unitLabelPosVar, unitLabelLLVar, unitLabelULVar, currentlyRunningLabelVar, statusLabelVar
+    global voltageLabel, referencePowerLabel, xPosLabel, yPosLabel, zPosLabel, rotPosLabel, unitLabelPos, unitLabelLL, unitLabelUL, currentyRunningLabel, statusLabel
 
     # Assign standard values
     testLabelVar = tk.StringVar(root, "TestLabel")
@@ -559,6 +605,8 @@ def create_gui(root):
     unitLabelPosVar = tk.StringVar(root, "mm/°")
     unitLabelLLVar = tk.StringVar(root, "mm/°")
     unitLabelULVar = tk.StringVar(root, "mm/°")
+    currentlyRunningLabelVar = tk.StringVar(root, "Free")
+    statusLabelVar = tk.StringVar(root, "")
 
     #Create Label elements and place them on the grid
 
@@ -597,6 +645,13 @@ def create_gui(root):
 
     numberOfPointsTextLabel = tk.Label(root, text="Number of points:", font=("Arial", 14))
     numberOfPointsTextLabel.grid(row=12, column=1, padx=5)
+
+    currentyRunningLabel = tk.Label(root, textvariable=currentlyRunningLabelVar, font=("Arial", 14))
+    currentyRunningLabel.grid(row=9, column=3, padx=5)
+
+    statusLabel = tk.Label(root, textvariable=statusLabelVar, font=("Arial", 14))
+    statusLabel.grid(row=17, column=1, padx=5)
+
 
     global manualVoltageButton, homeActuatorsButton, peakFindingButton, returnToOptimumButton, goToPosButton, startMeasurementRunButton, disconnectStagesButton
 
@@ -681,8 +736,11 @@ def getSelectorIndex():
 
 
 def testFunction():
-    vector = linspace(-1,1,35)
-    print(vector)
+
+    moveActuators(0, -0.52)
+    moveActuators(1, -4.95)
+    moveActuators(2, 2.68)
+    moveActuators(3, angleToLength(-2.17))
 
 def startPeakFindingThread():
     thread = threading.Thread(target=startPeakFinding)
@@ -734,5 +792,3 @@ global q
 q = queue.Queue()
 # Run the Tkinter main loop
 root.mainloop()
-
-
