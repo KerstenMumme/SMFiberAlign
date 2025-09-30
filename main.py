@@ -41,8 +41,6 @@ class LabelUpdate:
     label: int
     message: any
 
-#TODO Fix DC offset on CE and Fix plateau detection
-
 XAxisLimit = Limits(LowerLimit=-12, UpperLimit=5)
 YAxisLimit = Limits(LowerLimit=-12, UpperLimit=12)
 ZAxisLimit = Limits(LowerLimit=-3.8, UpperLimit=3.8)
@@ -522,7 +520,7 @@ def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, ax
     newLowerLimit = positions[LL]
     newUpperLimit = positions[UL]
     #TODO Change from recursively repeating the measurements to appending a second measurement run to them, in the direction that is missing.
-    #TODO For dataanalysis I need to sort the data
+    #TODO For data analysis I need to sort the data
     RecursionExpansion = [[0.05, 0.05], [0.05, 0.05], [0.3, 0.3], [angleToLength(0.5), angleToLength(0.5)]]
     RecursionDepthFactor = [1, 0.9, 0.8, 0.7, 0.6, 0.5]
     if recursionDepth < 5:
