@@ -14,6 +14,7 @@ import datetime
 from tkinter import *
 from pylablib.devices import Thorlabs #Thorlabs library
 import statistics
+import scipy
 
 import sys
 import clr
@@ -97,7 +98,7 @@ def save_to_csv(directory, filename, listOne, listTwo):
         os.makedirs(directory)
 
     length = len(listOne)
-    csvfile = open(directory + "/" + filename + ".csv", 'w', newline='')
+    csvfile = open(directory + "/" + filename + ".csv", 'a', newline='')
     for i in range(length):
         csvfile.write(str(listOne[i]) + ", " + str(listTwo[i]) + "\n")
 
@@ -171,6 +172,9 @@ def add_to_plot(XValue, YValue):
     else:
         XPlotList.append(XValue)  # Increment the x-axis value
         YPlotList.append(YValue)  # Get the input value for the y-axis
+        YPlotList = [x for _, x in sorted(zip(XPlotList, YPlotList), key=lambda pair: pair[0])]
+        XPlotList = sorted(XPlotList)
+
 
     # Clear the previous plot and update the frame
     for widget in plot_frame.winfo_children():
@@ -227,7 +231,7 @@ def startPeakFinding():
         if Debugging:
             print("Starting Itteration Nr:" + str(ItterationIndex))
 
-        if ItterationIndex >= MaxNumberOfItteration or LimitReached:
+        if ItterationIndex > MinNumberOfItteration and(ItterationIndex >= MaxNumberOfItteration or LimitReached):
             if LimitReached:
                 print("Improvement Limit Reached")
             if ItterationIndex >= MaxNumberOfItteration:
@@ -293,6 +297,7 @@ def manualMeasurementRun():
     lowerLimit = currentPosition + float(lowerLimitEntry.get())
     upperLimit = currentPosition + float(upperLimitEntry.get())
 
+    datapoints = int(numberOfPointsEntry.get())
     global ReferencePower
     ReferencePower = float(referencePowerEntry.get())
 
@@ -300,7 +305,7 @@ def manualMeasurementRun():
         lowerLimit = angleToLength(lowerLimit)
         upperLimit = angleToLength(upperLimit)
 
-    measurementRun(lowerLimit, upperLimit, NumberOfPoints, axisIndex, ReferencePower, "manual", recursionDepth=0)
+    measurementRun(lowerLimit, upperLimit, datapoints, axisIndex, ReferencePower, "manual", recursionDepth=0)
 
     messageUpdate = LabelUpdate(11, "Free")
     q.put(messageUpdate)
@@ -463,6 +468,8 @@ def detectPeak(coupEff: [float]):
             break
 
     result = [lowerBoundary, upperBoundary]
+    if Debugging:
+        print("Indieces Limits:" + str(result))
     return result
 
 def checkImprovement(currentCoupEff: float, oldCoupEff: float):
@@ -472,16 +479,13 @@ def checkImprovement(currentCoupEff: float, oldCoupEff: float):
     else:
         return False
 
-def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, axisIndex: int, referencePower: float, runNumber: any, recursionDepth: int):
-    clearPlotData()
 
-    messageUpdate = LabelUpdate(1, "Coupling Efficiency on " + options[axisIndex] + "on run Number: " + str(runNumber))
-    q.put(messageUpdate)
-    root.event_generate('<<UpdateLabel>>')
+def measurementMotion(lowerLimit: float, upperLimit: float, numberOfPoints: int, axisIndex: int, referencePower: float):
 
     positions = linspace(lowerLimit, upperLimit, numberOfPoints)
     voltages = [0.0] * numberOfPoints
     coupEff = [0.0] * numberOfPoints
+
     for id, pos in enumerate(positions):
         if not moveActuators(axisIndex, pos):
             disconnectAndClose()
@@ -494,11 +498,112 @@ def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, ax
 
         add_to_plot(positions[id], coupEff[id])
 
+    return [positions, coupEff]
 
+def runAnalysis(positions, coupEff, axisIndex, numberOfPoints, referencePower, recursionDepth, runNumber):
     maximum = max(coupEff)
     maxIndex = coupEff.index(maximum)
     maxPosition = positions[maxIndex]
-    AxisNames = ["XAxis", "YAxis", "ZAxis", "RotAxis"]
+
+    lowerLimit = min(positions)
+    upperLimit = max(positions)
+    span = upperLimit - lowerLimit
+
+    if axisIndex == 3 and recursionDepth > 2:
+        windowLength = 5
+        filteredSignal = np.convolve(coupEff, np.ones(windowLength)/windowLength, mode='same')
+        axisThreeSpan = max(filteredSignal) - min(filteredSignal)
+        if axisThreeSpan < (0.2 * axisThreeSpan):
+            if Debugging:
+                print("Only Noise detected in rotation axis, moving to zero.")
+            return[0.0, maximum, angleToLength(-1), angleToLength(1)]
+
+    [LL, UL] = detectPeak(coupEff)
+    length = len(positions)
+    # Check if limits are either too narrow, of at the left or right edge of the range
+    narrowPeak = abs(LL - UL) <= 1
+    lowerFlank = LL <= 1
+    upperFlank = UL >= (length - 2)
+
+    if Debugging:
+        print("Narrow Peak: " + str(narrowPeak) + " LowerFlank: " + str(lowerFlank) + " upperFlank: " + str(upperFlank))
+
+    newLowerLimit = positions[LL]
+    newUpperLimit = positions[UL]
+
+
+    RecursionExpansion = [0.1, 0.3]
+
+    if recursionDepth < 5 and (narrowPeak or lowerFlank or upperFlank):
+
+        if narrowPeak:
+            if Debugging:
+                print("Narrow Peak detected on Axis: " + str(axisIndex))
+            [appendPos, appendCoupEff] = measurementMotion(
+                lowerLimit=(positions[LL] - (span * RecursionExpansion[0])),
+                upperLimit=(positions[UL] + (span * RecursionExpansion[0])),
+                numberOfPoints=NumberOfPoints,
+                axisIndex=axisIndex,
+                referencePower=referencePower)
+
+        if lowerFlank:
+            if Debugging:
+                print("Lower Flank detected on Axis: " + str(axisIndex))
+            [appendPos, appendCoupEff] = measurementMotion(
+                lowerLimit=(lowerLimit - (RecursionExpansion[1] * span)),
+                upperLimit=(positions[UL]),
+                numberOfPoints=NumberOfPoints,
+                axisIndex=axisIndex,
+                referencePower=referencePower)
+
+        if upperFlank:
+            if Debugging:
+                print("Upper Flank detected on Axis: " + str(axisIndex))
+            [appendPos, appendCoupEff] = measurementMotion(
+                    lowerLimit=(positions[LL]),
+                    upperLimit=(upperLimit + (RecursionExpansion[1] * span)),
+                    numberOfPoints=NumberOfPoints,
+                    axisIndex=axisIndex,
+                    referencePower=referencePower)
+
+        positions = positions + appendPos
+        coupEff = coupEff + appendCoupEff
+        coupEff = [x for _, x in sorted(zip(positions, coupEff), key=lambda pair: pair[0])]
+        positions = sorted(positions)
+        return runAnalysis(positions=positions,
+                            coupEff=coupEff,
+                            axisIndex=axisIndex,
+                            numberOfPoints=numberOfPoints,
+                            referencePower=referencePower,
+                            runNumber=runNumber,
+                            recursionDepth=recursionDepth + 1)
+
+
+    return[maxPosition, maximum, newLowerLimit, newUpperLimit]
+
+
+def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, axisIndex: int, referencePower: float, runNumber: any, recursionDepth: int):
+    clearPlotData()
+
+    messageUpdate = LabelUpdate(1, "Coupling Efficiency on " + options[axisIndex] + "on run Number: " + str(runNumber))
+    q.put(messageUpdate)
+    root.event_generate('<<UpdateLabel>>')
+
+
+    [positions, coupEff] = measurementMotion(lowerLimit=lowerLimit,
+                                             upperLimit=upperLimit,
+                                             numberOfPoints=numberOfPoints,
+                                             axisIndex=axisIndex,
+                                             referencePower=referencePower )
+
+    [maxPosition, maximum, newLowerLimit, newUpperLimit] = runAnalysis(positions=positions,
+                                                                       coupEff=coupEff,
+                                                                       axisIndex=axisIndex,
+                                                                       numberOfPoints=numberOfPoints,
+                                                                       runNumber=runNumber,
+                                                                       recursionDepth=recursionDepth,
+                                                                       referencePower=referencePower)
+
 
     if axisIndex == 3:
         temp = positions
@@ -506,43 +611,16 @@ def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, ax
             temp[id] = lengthToAngle(pos)
         positions = temp
 
-    save_to_csv(dt_string + "/Run" + str(runNumber) + "/", str(AxisNames[axisIndex]), positions, voltages)
-    [LL, UL] = detectPeak(coupEff)
+    save_to_csv(dt_string + "/Run" + str(runNumber) + "/", str(options[axisIndex]), positions, coupEff)
 
-    # Check if limits are either too narrow, of at the left or right edge of the range
-    narrowPeak = abs(LL - UL) <= 1
-    lowerFlank = LL <= 1
-    upperFlank = UL >= (NumberOfPoints - 2)
-
-    if Debugging:
-        print("Narrow Peak: " + str(narrowPeak) + " LowerFlank: " + str(lowerFlank) + " upperFlank: " + str(upperFlank))
-
-    newLowerLimit = positions[LL]
-    newUpperLimit = positions[UL]
-    #TODO Change from recursively repeating the measurements to appending a second measurement run to them, in the direction that is missing.
-    #TODO For data analysis I need to sort the data
-    RecursionExpansion = [[0.05, 0.05], [0.05, 0.05], [0.3, 0.3], [angleToLength(0.5), angleToLength(0.5)]]
-    RecursionDepthFactor = [1, 0.9, 0.8, 0.7, 0.6, 0.5]
-    if recursionDepth < 5:
-        if narrowPeak:
-            if Debugging:
-                print("Narrow Peak detected on Axis: " + str(axisIndex))
-            return measurementRun(positions[LL] - RecursionExpansion[axisIndex][0], positions[UL] + RecursionExpansion[axisIndex][0], numberOfPoints, axisIndex, referencePower, runNumber, recursionDepth + 1)
-
-        if lowerFlank:
-            if Debugging:
-                print("Lower Flank detected on Axis: " + str(axisIndex))
-            return measurementRun(lowerLimit - (RecursionExpansion[axisIndex][1] * RecursionDepthFactor[recursionDepth]), upperLimit, numberOfPoints, axisIndex, referencePower, runNumber, recursionDepth + 1)
-
-        if upperFlank:
-            if Debugging:
-                print("Lower Flank detected on Axis: " + str(axisIndex))
-            return measurementRun(lowerLimit, upperLimit + (RecursionExpansion[axisIndex][1] * RecursionDepthFactor[recursionDepth]), numberOfPoints, axisIndex, referencePower, runNumber, recursionDepth + 1)
-
-    moveActuators(axisIndex, maxPosition)
+    if axisIndex == 0 or axisIndex == 1:
+        center = ((newUpperLimit - newLowerLimit) / 2) + newLowerLimit
+        moveActuators(axisIndex, center)
+    else:
+        moveActuators(axisIndex, maxPosition)
 
     if Debugging:
-        print(str(maxPosition))
+        print("Returning to " + str(maxPosition))
 
 
     return [maximum, newLowerLimit, newUpperLimit]
@@ -735,10 +813,9 @@ def getSelectorIndex():
 
 def testFunction():
 
-    moveActuators(0, -0.52)
+    moveActuators(0, -0.84)
     moveActuators(1, -4.95)
-    moveActuators(2, 2.68)
-    moveActuators(3, angleToLength(-2.17))
+    #moveActuators(2, 2.68)
 
 def startPeakFindingThread():
     thread = threading.Thread(target=startPeakFinding)
