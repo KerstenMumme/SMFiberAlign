@@ -14,6 +14,7 @@ import datetime
 from tkinter import *
 from pylablib.devices import Thorlabs #Thorlabs library
 import statistics
+import random
 import scipy
 
 import sys
@@ -70,13 +71,12 @@ OptimumList = [0.0, 0.0, 0.0, 0.0]
 ReachedOptimum = False
 
 
-NumberOfPoints = 35
 CouplingEfficiencyRatio = 0.5
 
 NumberOfDataPoints = 35
-MaxNumberOfItteration = 40
-MinNumberOfItteration = 5
-ImprovementLimit = 0.02
+MaxNumberOfItteration = 15
+MinNumberOfItteration = 8
+ImprovementLimit = 0.01
 
 global Debugging
 Debugging = True
@@ -164,7 +164,11 @@ def create_plot(frame, x, y):
     # Pack the canvas in the frame (or use .grid(), .place())
     canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-def add_to_plot(XValue, YValue):
+def add_to_plot(XValue, YValue, axisIndex):
+
+    if axisIndex == 3:
+        XValue = lengthToAngle(XValue)
+
     global XPlotList, YPlotList
     if len(XPlotList) == 0:
         XPlotList = [XValue]
@@ -190,8 +194,8 @@ def clearPlotData():
 
 def manualVoltageMesurement():
 
-    XPS_VoltageGet(XPSStage)
-
+    voltage = XPS_VoltageGet(XPSStage)
+    return voltage
 
 
 def startPeakFinding():
@@ -209,10 +213,10 @@ def startPeakFinding():
     else:
         ReferencePower = float(referencePowerEntry.get())
 
-    XBounaries = [-1, 1]
+    XBounaries = [-0.5, 0.5]
     XBounaries = [x + PositionList[0] for x in XBounaries]
 
-    YBounaries = [-1, 1]
+    YBounaries = [-0.5, 0.5]
     YBounaries = [x + PositionList[1] for x in YBounaries]
 
     ZBounaries = [-1, 1]
@@ -225,7 +229,7 @@ def startPeakFinding():
     MaximumCoupEff = 0.0
 
     posFile = open(dt_string + "/PosFile.txt", "w")
-    posFile.write("Itteration, AxisIndex, XPos, YPos, ZPos, RotPos")
+    posFile.write("Itteration, AxisIndex, XPos, YPos, ZPos, RotPos\n")
     for ItterationIndex in range(MaxNumberOfItteration):
 
         if Debugging:
@@ -238,14 +242,14 @@ def startPeakFinding():
                 print("Max Number of Itterations Reached")
             break
 
-        for Axis in range(4):
+        for Axis in range(3): # Range(3) for x,y,z and rot, Range(2) for only x,y and z
             RecursionDepth = 0
 
             messageUpdate = LabelUpdate(12, "Run: "+ str(ItterationIndex) + ", Axis: " + options[Axis])
             q.put(messageUpdate)
             root.event_generate('<<UpdateLabel>>')
 
-            [MaximumCoupEff, BoundaryTable[Axis][0], BoundaryTable[Axis][1]] = measurementRun(lowerLimit=BoundaryTable[Axis][0], upperLimit=BoundaryTable[Axis][1], numberOfPoints=NumberOfPoints, axisIndex=Axis,referencePower=ReferencePower, runNumber=ItterationIndex, recursionDepth=RecursionDepth)
+            [MaximumCoupEff, BoundaryTable[Axis][0], BoundaryTable[Axis][1]] = measurementRun(lowerLimit=BoundaryTable[Axis][0], upperLimit=BoundaryTable[Axis][1], numberOfPoints=NumberOfDataPoints, axisIndex=Axis,referencePower=ReferencePower, runNumber=ItterationIndex, recursionDepth=RecursionDepth)
 
             posFile.write(str(ItterationIndex) + ", " + str(Axis) + ", " + str(PositionList[0]) + ", " + str(PositionList[1]) + ", " + str(PositionList[2]) + ", " + str(lengthToAngle(PositionList[3])) + "\n")
 
@@ -496,7 +500,7 @@ def measurementMotion(lowerLimit: float, upperLimit: float, numberOfPoints: int,
         if Debugging:
             print("Coupling Efficiency: " + str(coupEff[id]))
 
-        add_to_plot(positions[id], coupEff[id])
+        add_to_plot(positions[id], coupEff[id], axisIndex)
 
     return [positions, coupEff]
 
@@ -516,12 +520,12 @@ def runAnalysis(positions, coupEff, axisIndex, numberOfPoints, referencePower, r
         if axisThreeSpan < (0.2 * axisThreeSpan):
             if Debugging:
                 print("Only Noise detected in rotation axis, moving to zero.")
-            return[0.0, maximum, angleToLength(-1), angleToLength(1)]
+            return[angleToLength(0.0), maximum, angleToLength(-1), angleToLength(1)]
 
     [LL, UL] = detectPeak(coupEff)
     length = len(positions)
     # Check if limits are either too narrow, of at the left or right edge of the range
-    narrowPeak = abs(LL - UL) <= 1
+    narrowPeak = abs(LL - UL) <= 3
     lowerFlank = LL <= 1
     upperFlank = UL >= (length - 2)
 
@@ -533,16 +537,17 @@ def runAnalysis(positions, coupEff, axisIndex, numberOfPoints, referencePower, r
 
 
     RecursionExpansion = [0.1, 0.3]
-
+    RecursionExpansionFactorNP = [1, 0.9, 0.8, 0.7, 0.6, 0.5]
+    RecursionExpansionFactorFlank = [1, 1.2, 1.4, 1.5, 1.6, 1.6, 1.6]
     if recursionDepth < 5 and (narrowPeak or lowerFlank or upperFlank):
 
         if narrowPeak:
             if Debugging:
                 print("Narrow Peak detected on Axis: " + str(axisIndex))
             [appendPos, appendCoupEff] = measurementMotion(
-                lowerLimit=(positions[LL] - (span * RecursionExpansion[0])),
-                upperLimit=(positions[UL] + (span * RecursionExpansion[0])),
-                numberOfPoints=NumberOfPoints,
+                lowerLimit=(positions[LL] - (span * RecursionExpansion[0] * RecursionExpansionFactorNP[recursionDepth])),
+                upperLimit=(positions[UL] + (span * RecursionExpansion[0] * RecursionExpansionFactorNP[recursionDepth])),
+                numberOfPoints=numberOfPoints,
                 axisIndex=axisIndex,
                 referencePower=referencePower)
 
@@ -550,9 +555,9 @@ def runAnalysis(positions, coupEff, axisIndex, numberOfPoints, referencePower, r
             if Debugging:
                 print("Lower Flank detected on Axis: " + str(axisIndex))
             [appendPos, appendCoupEff] = measurementMotion(
-                lowerLimit=(lowerLimit - (RecursionExpansion[1] * span)),
+                lowerLimit=(lowerLimit - (RecursionExpansion[1] * span * RecursionExpansionFactorFlank[recursionDepth])),
                 upperLimit=(positions[UL]),
-                numberOfPoints=NumberOfPoints,
+                numberOfPoints=numberOfPoints,
                 axisIndex=axisIndex,
                 referencePower=referencePower)
 
@@ -561,8 +566,8 @@ def runAnalysis(positions, coupEff, axisIndex, numberOfPoints, referencePower, r
                 print("Upper Flank detected on Axis: " + str(axisIndex))
             [appendPos, appendCoupEff] = measurementMotion(
                     lowerLimit=(positions[LL]),
-                    upperLimit=(upperLimit + (RecursionExpansion[1] * span)),
-                    numberOfPoints=NumberOfPoints,
+                    upperLimit=(upperLimit + (RecursionExpansion[1] * span * RecursionExpansionFactorFlank[recursionDepth])),
+                    numberOfPoints=numberOfPoints,
                     axisIndex=axisIndex,
                     referencePower=referencePower)
 
@@ -579,7 +584,7 @@ def runAnalysis(positions, coupEff, axisIndex, numberOfPoints, referencePower, r
                             recursionDepth=recursionDepth + 1)
 
 
-    return[maxPosition, maximum, newLowerLimit, newUpperLimit]
+    return[maxPosition, maximum, newLowerLimit, newUpperLimit, positions, coupEff]
 
 
 def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, axisIndex: int, referencePower: float, runNumber: any, recursionDepth: int):
@@ -596,7 +601,7 @@ def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, ax
                                              axisIndex=axisIndex,
                                              referencePower=referencePower )
 
-    [maxPosition, maximum, newLowerLimit, newUpperLimit] = runAnalysis(positions=positions,
+    [maxPosition, maximum, newLowerLimit, newUpperLimit, positions, coupEff] = runAnalysis(positions=positions,
                                                                        coupEff=coupEff,
                                                                        axisIndex=axisIndex,
                                                                        numberOfPoints=numberOfPoints,
@@ -618,6 +623,10 @@ def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, ax
         moveActuators(axisIndex, center)
     else:
         moveActuators(axisIndex, maxPosition)
+
+    if newUpperLimit == newLowerLimit: #if narrow peak is not resolved, create artificial width to avoid mesureing on the same spot
+        newLowerLimit = newLowerLimit - 0.05
+        newUpperLimit = newUpperLimit + 0.05
 
     if Debugging:
         print("Returning to " + str(maxPosition))
@@ -813,9 +822,21 @@ def getSelectorIndex():
 
 def testFunction():
 
-    moveActuators(0, -0.84)
-    moveActuators(1, -4.95)
+    #moveActuators(0, -1.22)
+    #moveActuators(1, -5.06)
+    #moveActuators(2, 2)
     #moveActuators(2, 2.68)
+    AxisIndex = getSelectorIndex()
+    pos = PositionList[AxisIndex]
+    random.seed(123)
+    Index = [0.0] * 100
+    VoltList = [0.0] * 100
+    for i in range(100):
+        Index[i] = i
+        moveActuators(AxisIndex, (pos + (random.random() - 0.5) * 0.6))
+        moveActuators(AxisIndex, pos)
+        VoltList[i] = manualVoltageMesurement()
+    save_to_csv(dt_string, "StageRepeatablility" + str(AxisIndex), Index, VoltList)
 
 def startPeakFindingThread():
     thread = threading.Thread(target=startPeakFinding)
