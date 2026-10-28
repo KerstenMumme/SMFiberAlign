@@ -16,6 +16,8 @@ from pylablib.devices import Thorlabs #Thorlabs library
 import statistics
 import random
 import scipy
+from discordwebhook import Discord
+
 
 import sys
 import clr
@@ -237,9 +239,13 @@ def startPeakFinding():
 
         if ItterationIndex > MinNumberOfItteration and(ItterationIndex >= MaxNumberOfItteration or LimitReached):
             if LimitReached:
+                discord = Discord(url="https://discord.com/api/webhooks/1564944540484370444/3J7491v6zHLCYjK6-ocp9iWY8QcA1IzXzpjwpXJ4Mf5WriEEjB8R44zKbhNH84_SkTWc")
+                discord.post(content="Improvement Limit reached.")
                 print("Improvement Limit Reached")
             if ItterationIndex >= MaxNumberOfItteration:
                 print("Max Number of Itterations Reached")
+                discord = Discord(url="https://discord.com/api/webhooks/1564944540484370444/3J7491v6zHLCYjK6-ocp9iWY8QcA1IzXzpjwpXJ4Mf5WriEEjB8R44zKbhNH84_SkTWc")
+                discord.post(content="Maximum Number of Iterations reached.")
             break
 
         for Axis in range(3): # Range(4) for x,y,z and rot, Range(3) for only x,y and z
@@ -325,6 +331,8 @@ def moveActuators(AxisIndex: int, Position: float):
 
     if not LimitList[AxisIndex].CheckLimit(Position=Position):
         print("Limit Error on Axis: " + str(AxisIndex) + ", at position: " + str(Position))
+        discord = Discord(url="https://discord.com/api/webhooks/1564944540484370444/3J7491v6zHLCYjK6-ocp9iWY8QcA1IzXzpjwpXJ4Mf5WriEEjB8R44zKbhNH84_SkTWc")
+        discord.post(content="Axis tried to run into Limit.")
         disconnectAndClose()
         return False
     if Debugging:
