@@ -75,7 +75,7 @@ CouplingEfficiencyRatio = 0.5
 
 NumberOfDataPoints = 35
 MaxNumberOfItteration = 15
-MinNumberOfItteration = 8
+MinNumberOfItteration = 5
 ImprovementLimit = 0.01
 
 global Debugging
@@ -222,7 +222,7 @@ def startPeakFinding():
     ZBounaries = [-1, 1]
     ZBounaries = [x + PositionList[2] for x in ZBounaries]
 
-    RotBounaries = [angleToLength(-1), angleToLength(1)]
+    RotBounaries = [angleToLength(-3), angleToLength(3)]
     RotBounaries = [x + PositionList[3] for x in RotBounaries]
 
     BoundaryTable = [XBounaries, YBounaries, ZBounaries, RotBounaries]
@@ -242,7 +242,7 @@ def startPeakFinding():
                 print("Max Number of Itterations Reached")
             break
 
-        for Axis in range(3): # Range(3) for x,y,z and rot, Range(2) for only x,y and z
+        for Axis in range(3): # Range(4) for x,y,z and rot, Range(3) for only x,y and z
             RecursionDepth = 0
 
             messageUpdate = LabelUpdate(12, "Run: "+ str(ItterationIndex) + ", Axis: " + options[Axis])
@@ -520,7 +520,7 @@ def runAnalysis(positions, coupEff, axisIndex, numberOfPoints, referencePower, r
         if axisThreeSpan < (0.2 * axisThreeSpan):
             if Debugging:
                 print("Only Noise detected in rotation axis, moving to zero.")
-            return[angleToLength(0.0), maximum, angleToLength(-1), angleToLength(1)]
+            return[angleToLength(0.0), maximum, angleToLength(-3), angleToLength(3)]
 
     [LL, UL] = detectPeak(coupEff)
     length = len(positions)
@@ -822,21 +822,11 @@ def getSelectorIndex():
 
 def testFunction():
 
-    #moveActuators(0, -1.22)
-    #moveActuators(1, -5.06)
+    moveActuators(0, -1.22)
+    moveActuators(1, -5.06)
     #moveActuators(2, 2)
     #moveActuators(2, 2.68)
-    AxisIndex = getSelectorIndex()
-    pos = PositionList[AxisIndex]
-    random.seed(123)
-    Index = [0.0] * 100
-    VoltList = [0.0] * 100
-    for i in range(100):
-        Index[i] = i
-        moveActuators(AxisIndex, (pos + (random.random() - 0.5) * 0.6))
-        moveActuators(AxisIndex, pos)
-        VoltList[i] = manualVoltageMesurement()
-    save_to_csv(dt_string, "StageRepeatablility" + str(AxisIndex), Index, VoltList)
+
 
 def startPeakFindingThread():
     thread = threading.Thread(target=startPeakFinding)
