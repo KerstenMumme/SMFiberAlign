@@ -17,10 +17,6 @@ import statistics
 import random
 import scipy
 from discordwebhook import Discord
-<<<<<<< HEAD
-=======
-
->>>>>>> 614cb14f995644324460abe1c14a1d361814569b
 
 import sys
 import clr
