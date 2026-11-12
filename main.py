@@ -77,7 +77,7 @@ CouplingEfficiencyRatio = 0.5
 NumberOfDataPoints = 35
 MaxNumberOfItteration = 15
 MinNumberOfItteration = 8
-ImprovementLimit = 0.01
+ImprovementLimit = 0.1
 
 global Debugging
 Debugging = True
@@ -199,6 +199,16 @@ def manualVoltageMesurement():
     return voltage
 
 
+
+def calculateMoments(xValues, yValues):
+    TotalWeight = np.sum(yValues)
+    FirstMoment = np.sum(np.multiply(xValues, yValues)) / TotalWeight
+    SecondMoment = np.sqrt(np.sum(np.multiply(yValues, np.power(np.subtract(xValues, FirstMoment), 2))) / TotalWeight)
+    Mu = np.sum(np.multiply(yValues, np.power(np.subtract(xValues, FirstMoment), 3))) / TotalWeight
+    ThirdMoment = Mu / (SecondMoment**3)
+    return [FirstMoment, SecondMoment, ThirdMoment]
+
+
 def startPeakFinding():
 
     messageUpdate = LabelUpdate(11, "Peak Finding")
@@ -236,7 +246,7 @@ def startPeakFinding():
         if Debugging:
             print("Starting Itteration Nr:" + str(ItterationIndex))
 
-        if ItterationIndex > MinNumberOfItteration and(ItterationIndex >= MaxNumberOfItteration or LimitReached):
+        if ItterationIndex > MinNumberOfItteration and (ItterationIndex >= MaxNumberOfItteration or LimitReached):
             if LimitReached:
                 try:
                     discord = Discord(url="https://discord.com/api/webhooks/1564944540484370444/3J7491v6zHLCYjK6-ocp9iWY8QcA1IzXzpjwpXJ4Mf5WriEEjB8R44zKbhNH84_SkTWc")
@@ -244,8 +254,6 @@ def startPeakFinding():
                 except:
                     print("No Wifi")
 
-                discord = Discord(url="https://discord.com/api/webhooks/1564944540484370444/3J7491v6zHLCYjK6-ocp9iWY8QcA1IzXzpjwpXJ4Mf5WriEEjB8R44zKbhNH84_SkTWc")
-                discord.post(content="Improvement Limit reached.")
                 print("Improvement Limit Reached")
             if ItterationIndex >= MaxNumberOfItteration:
                 try:
@@ -254,8 +262,6 @@ def startPeakFinding():
                 except:
                     print("No Wifi")
                 print("Max Number of Itterations Reached")
-                discord = Discord(url="https://discord.com/api/webhooks/1564944540484370444/3J7491v6zHLCYjK6-ocp9iWY8QcA1IzXzpjwpXJ4Mf5WriEEjB8R44zKbhNH84_SkTWc")
-                discord.post(content="Maximum Number of Iterations reached.")
             break
 
         for Axis in range(3): # Range(4) for x,y,z and rot, Range(3) for only x,y and z
@@ -265,7 +271,7 @@ def startPeakFinding():
             q.put(messageUpdate)
             root.event_generate('<<UpdateLabel>>')
 
-            [MaximumCoupEff, BoundaryTable[Axis][0], BoundaryTable[Axis][1]] = measurementRun(lowerLimit=BoundaryTable[Axis][0], upperLimit=BoundaryTable[Axis][1], numberOfPoints=NumberOfDataPoints, axisIndex=Axis,referencePower=ReferencePower, runNumber=ItterationIndex, recursionDepth=RecursionDepth)
+            [MaximumCoupEff, BoundaryTable[Axis][0], BoundaryTable[Axis][1], Moments] = measurementRun(lowerLimit=BoundaryTable[Axis][0], upperLimit=BoundaryTable[Axis][1], numberOfPoints=NumberOfDataPoints, axisIndex=Axis,referencePower=ReferencePower, runNumber=ItterationIndex, recursionDepth=RecursionDepth)
 
             posFile.write(str(ItterationIndex) + ", " + str(Axis) + ", " + str(PositionList[0]) + ", " + str(PositionList[1]) + ", " + str(PositionList[2]) + ", " + str(lengthToAngle(PositionList[3])) + "\n")
 
@@ -273,7 +279,7 @@ def startPeakFinding():
                 print("Axis: " + str(Axis) + " between " + str(BoundaryTable[Axis][0]) + " and " + str(BoundaryTable[Axis][1]) + " at " + str(MaximumCoupEff) + "% Coupling Efficiency.")
 
         if ItterationIndex > MinNumberOfItteration:
-            LimitReached = checkImprovement(MaximumCoupEff, ImprovementList[ItterationIndex - 1])
+            LimitReached = checkImprovement(Moments)
 
 
         ImprovementList[ItterationIndex] = MaximumCoupEff
@@ -346,8 +352,6 @@ def moveActuators(AxisIndex: int, Position: float):
             discord.post(content="Stage tried to go into limit.")
         except:
             print("No Wifi")
-        discord = Discord(url="https://discord.com/api/webhooks/1564944540484370444/3J7491v6zHLCYjK6-ocp9iWY8QcA1IzXzpjwpXJ4Mf5WriEEjB8R44zKbhNH84_SkTWc")
-        discord.post(content="Axis tried to run into Limit.")
         disconnectAndClose()
         return False
     if Debugging:
@@ -499,9 +503,9 @@ def detectPeak(coupEff: [float]):
         print("Indieces Limits:" + str(result))
     return result
 
-def checkImprovement(currentCoupEff: float, oldCoupEff: float):
+def checkImprovement(momentList):
 
-    if abs(1 - (currentCoupEff / oldCoupEff)) < ImprovementLimit:
+    if abs(momentList[2]) < ImprovementLimit:
         return True
     else:
         return False
@@ -641,9 +645,10 @@ def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, ax
 
     save_to_csv(dt_string + "/Run" + str(runNumber) + "/", str(options[axisIndex]), positions, coupEff)
 
+    Moments = calculateMoments(positions, coupEff)
+
     if axisIndex == 0 or axisIndex == 1:
-        center = ((newUpperLimit - newLowerLimit) / 2) + newLowerLimit
-        moveActuators(axisIndex, center)
+        moveActuators(axisIndex, Moments[0])
     else:
         moveActuators(axisIndex, maxPosition)
 
@@ -659,7 +664,7 @@ def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, ax
     newUpperLimit = newUpperLimit + (0.3 * distanceBetweenNewLimits)
     newLowerLimit = newLowerLimit - (0.3 * distanceBetweenNewLimits)
 
-    return [maximum, newLowerLimit, newUpperLimit]
+    return [maximum, newLowerLimit, newUpperLimit, Moments]
 
 
 
