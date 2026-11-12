@@ -17,6 +17,10 @@ import statistics
 import random
 import scipy
 from discordwebhook import Discord
+<<<<<<< HEAD
+=======
+
+>>>>>>> 614cb14f995644324460abe1c14a1d361814569b
 
 import sys
 import clr
@@ -243,6 +247,9 @@ def startPeakFinding():
                     discord.post(content="Improvement Limit reached.")
                 except:
                     print("No Wifi")
+
+                discord = Discord(url="https://discord.com/api/webhooks/1564944540484370444/3J7491v6zHLCYjK6-ocp9iWY8QcA1IzXzpjwpXJ4Mf5WriEEjB8R44zKbhNH84_SkTWc")
+                discord.post(content="Improvement Limit reached.")
                 print("Improvement Limit Reached")
             if ItterationIndex >= MaxNumberOfItteration:
                 try:
@@ -251,6 +258,8 @@ def startPeakFinding():
                 except:
                     print("No Wifi")
                 print("Max Number of Itterations Reached")
+                discord = Discord(url="https://discord.com/api/webhooks/1564944540484370444/3J7491v6zHLCYjK6-ocp9iWY8QcA1IzXzpjwpXJ4Mf5WriEEjB8R44zKbhNH84_SkTWc")
+                discord.post(content="Maximum Number of Iterations reached.")
             break
 
         for Axis in range(3): # Range(4) for x,y,z and rot, Range(3) for only x,y and z
@@ -341,6 +350,8 @@ def moveActuators(AxisIndex: int, Position: float):
             discord.post(content="Stage tried to go into limit.")
         except:
             print("No Wifi")
+        discord = Discord(url="https://discord.com/api/webhooks/1564944540484370444/3J7491v6zHLCYjK6-ocp9iWY8QcA1IzXzpjwpXJ4Mf5WriEEjB8R44zKbhNH84_SkTWc")
+        discord.post(content="Axis tried to run into Limit.")
         disconnectAndClose()
         return False
     if Debugging:
