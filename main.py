@@ -16,6 +16,7 @@ from pylablib.devices import Thorlabs #Thorlabs library
 import statistics
 import random
 import scipy
+from discordwebhook import Discord
 
 import sys
 import clr
@@ -75,7 +76,7 @@ CouplingEfficiencyRatio = 0.5
 
 NumberOfDataPoints = 35
 MaxNumberOfItteration = 15
-MinNumberOfItteration = 5
+MinNumberOfItteration = 8
 ImprovementLimit = 0.01
 
 global Debugging
@@ -237,8 +238,18 @@ def startPeakFinding():
 
         if ItterationIndex > MinNumberOfItteration and(ItterationIndex >= MaxNumberOfItteration or LimitReached):
             if LimitReached:
+                try:
+                    discord = Discord(url="https://discord.com/api/webhooks/1564944540484370444/3J7491v6zHLCYjK6-ocp9iWY8QcA1IzXzpjwpXJ4Mf5WriEEjB8R44zKbhNH84_SkTWc")
+                    discord.post(content="Improvement Limit reached.")
+                except:
+                    print("No Wifi")
                 print("Improvement Limit Reached")
             if ItterationIndex >= MaxNumberOfItteration:
+                try:
+                    discord = Discord(url="https://discord.com/api/webhooks/1564944540484370444/3J7491v6zHLCYjK6-ocp9iWY8QcA1IzXzpjwpXJ4Mf5WriEEjB8R44zKbhNH84_SkTWc")
+                    discord.post(content="Max Number of Iterations reached.")
+                except:
+                    print("No Wifi")
                 print("Max Number of Itterations Reached")
             break
 
@@ -325,6 +336,11 @@ def moveActuators(AxisIndex: int, Position: float):
 
     if not LimitList[AxisIndex].CheckLimit(Position=Position):
         print("Limit Error on Axis: " + str(AxisIndex) + ", at position: " + str(Position))
+        try:
+            discord = Discord(url="https://discord.com/api/webhooks/1564944540484370444/3J7491v6zHLCYjK6-ocp9iWY8QcA1IzXzpjwpXJ4Mf5WriEEjB8R44zKbhNH84_SkTWc")
+            discord.post(content="Stage tried to go into limit.")
+        except:
+            print("No Wifi")
         disconnectAndClose()
         return False
     if Debugging:
@@ -525,7 +541,7 @@ def runAnalysis(positions, coupEff, axisIndex, numberOfPoints, referencePower, r
     [LL, UL] = detectPeak(coupEff)
     length = len(positions)
     # Check if limits are either too narrow, of at the left or right edge of the range
-    narrowPeak = abs(LL - UL) <= 3
+    narrowPeak = abs(LL - UL) <= 4
     lowerFlank = LL <= 1
     upperFlank = UL >= (length - 2)
 
@@ -631,6 +647,10 @@ def measurementRun(lowerLimit: float, upperLimit: float, numberOfPoints: int, ax
     if Debugging:
         print("Returning to " + str(maxPosition))
 
+    #Increase distance between Limits a little, to make sure most of the peak is in the measurement Area again
+    distanceBetweenNewLimits = newUpperLimit - newLowerLimit
+    newUpperLimit = newUpperLimit + (0.3 * distanceBetweenNewLimits)
+    newLowerLimit = newLowerLimit - (0.3 * distanceBetweenNewLimits)
 
     return [maximum, newLowerLimit, newUpperLimit]
 
